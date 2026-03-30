@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Local Messenger Mock Client</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-theme="dark">
+    <div class="background-glow background-glow-left"></div>
+    <div class="background-glow background-glow-right"></div>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" data-copy="eyebrow"></p>
+          <h1 data-copy="title"></h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="language-toggle" class="ghost-button" type="button">EN</button>
+          <button id="theme-toggle" class="accent-button" type="button" data-copy="theme"></button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <aside class="panel chat-panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker" data-copy="rooms"></p>
+              <h2 data-copy="chatListTitle"></h2>
+            </div>
+            <span class="badge">LAN</span>
+          </div>
+          <label class="search-box">
+            <span data-copy="search"></span>
+            <input id="search-input" type="search" autocomplete="off" />
+          </label>
+          <div id="chat-list" class="chat-list"></div>
+        </aside>
+
+        <section class="panel thread-panel">
+          <div class="panel-header thread-header">
+            <div>
+              <p class="panel-kicker" data-copy="activeRoom"></p>
+              <h2 id="thread-title"></h2>
+            </div>
+            <div class="thread-header-meta">
+              <span class="meta-pill" id="online-count"></span>
+              <span class="meta-pill" data-copy="e2ee"></span>
+            </div>
+          </div>
+
+          <div id="message-list" class="message-list"></div>
+
+          <div class="composer">
+            <div class="composer-tools">
+              <button class="ghost-button small-button" type="button">+</button>
+              <button class="ghost-button small-button" type="button">GIF</button>
+              <button class="ghost-button small-button" type="button" data-copy="emoji"></button>
+            </div>
+            <label class="composer-input">
+              <span data-copy="messagePlaceholder"></span>
+              <textarea rows="2"></textarea>
+            </label>
+            <button class="accent-button" type="button" data-copy="send"></button>
+          </div>
+        </section>
+
+        <aside class="panel details-panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker" data-copy="roomInfo"></p>
+              <h2 data-copy="securityTitle"></h2>
+            </div>
+          </div>
+
+          <section class="invite-card">
+            <p class="invite-label" data-copy="inviteLabel"></p>
+            <strong>ROOM-2026</strong>
+            <span class="invite-expiry" data-copy="inviteExpiry"></span>
+          </section>
+
+          <section>
+            <h3 data-copy="membersTitle"></h3>
+            <div id="member-list" class="member-list"></div>
+          </section>
+
+          <section>
+            <h3 data-copy="securityChecklist"></h3>
+            <ul class="security-list">
+              <li data-copy="checklistOne"></li>
+              <li data-copy="checklistTwo"></li>
+              <li data-copy="checklistThree"></li>
+              <li data-copy="checklistFour"></li>
+            </ul>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

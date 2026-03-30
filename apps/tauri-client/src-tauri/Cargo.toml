@@ -1,0 +1,24 @@
+[package]
+name = "localmessenger_tauri_client"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+localmessenger_core = { path = "../../../crates/core" }
+localmessenger_crypto = { path = "../../../crates/crypto" }
+localmessenger_discovery = { path = "../../../crates/discovery" }
+localmessenger_messaging = { path = "../../../crates/messaging" }
+localmessenger_transport = { path = "../../../crates/transport" }
+rand_core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

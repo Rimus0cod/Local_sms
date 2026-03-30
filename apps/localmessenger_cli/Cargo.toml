@@ -1,0 +1,7 @@
+[package]
+name = "localmessenger_cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+localmessenger_core = { path = "../../crates/localmessenger_core" }

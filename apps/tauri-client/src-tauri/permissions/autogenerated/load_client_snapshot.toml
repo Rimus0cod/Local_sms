@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-load-client-snapshot"
+description = "Enables the load_client_snapshot command without any pre-configured scope."
+commands.allow = ["load_client_snapshot"]
+
+[[permission]]
+identifier = "deny-load-client-snapshot"
+description = "Denies the load_client_snapshot command without any pre-configured scope."
+commands.deny = ["load_client_snapshot"]
