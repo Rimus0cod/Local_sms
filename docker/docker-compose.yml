@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: localmessenger-relay
+    restart: unless-stopped
+    ports:
+      - "${RELAY_PORT:-7443}:7443/udp"
+    volumes:
+      - relay-data:/data
+    environment:
+      SERVER_NAME:          "${SERVER_NAME:-relay.local}"
+      INVITE_SECRET:        "${INVITE_SECRET:?Set INVITE_SECRET in .env}"
+      BIND_ADDR:            "0.0.0.0:7443"
+      RATE_WINDOW_SECONDS:  "${RATE_WINDOW_SECONDS:-60}"
+      PEER_FRAME_LIMIT:     "${PEER_FRAME_LIMIT:-120}"
+      BLOB_REQUEST_LIMIT:   "${BLOB_REQUEST_LIMIT:-32}"
+      BLOB_CHUNK_BYTE_LIMIT: "${BLOB_CHUNK_BYTE_LIMIT:-20971520}"
+      HEALTH_CHECK_LIMIT:   "${HEALTH_CHECK_LIMIT:-12}"
+
+volumes:
+  relay-data:

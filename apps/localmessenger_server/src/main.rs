@@ -51,6 +51,10 @@ async fn main() -> Result<(), String> {
             let command = ServeCommand::from_args(&args[2..])?;
             run_server(command).await
         }
+        Some("gen-cert") => {
+            let command = GenCertCommand::from_args(&args[2..])?;
+            gen_cert(command).await
+        }
         Some("register-device") => {
             let command = RegisterDeviceCommand::from_args(&args[2..])?;
             register_device(command).await
@@ -130,6 +134,22 @@ impl ServeCommand {
 }
 
 #[derive(Debug, Clone)]
+struct GenCertCommand {
+    server_name: String,
+    cert_path: PathBuf,
+    key_path: PathBuf,
+}
+
+impl GenCertCommand {
+    fn from_args(args: &[String]) -> Result<Self, String> {
+        Ok(Self {
+            server_name: parse_flag(args, "--server-name")?,
+            cert_path: PathBuf::from(parse_flag(args, "--cert")?),
+            key_path: PathBuf::from(parse_flag(args, "--key")?),
+        })
+    }
+}
+
 struct RegisterDeviceCommand {
     database_url: String,
     bundle_path: PathBuf,
@@ -621,6 +641,35 @@ async fn handle_join_with_invite(
     }
 }
 
+async fn gen_cert(command: GenCertCommand) -> Result<(), String> {
+    let identity = TransportIdentity::generate(&command.server_name)
+        .map_err(|error| format!("certificate generation failed: {error}"))?;
+
+    if let Some(parent) = command.cert_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("cannot create cert directory: {error}"))?;
+        }
+    }
+    if let Some(parent) = command.key_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("cannot create key directory: {error}"))?;
+        }
+    }
+
+    fs::write(&command.cert_path, &identity.certificate_der)
+        .map_err(|error| format!("cannot write certificate: {error}"))?;
+    fs::write(&command.key_path, &identity.private_key_der)
+        .map_err(|error| format!("cannot write private key: {error}"))?;
+
+    println!("Server name : {}", command.server_name);
+    println!("Certificate : {}", command.cert_path.display());
+    println!("Private key : {}", command.key_path.display());
+    println!("OK — certificate generated successfully.");
+    Ok(())
+}
+
 async fn register_device(command: RegisterDeviceCommand) -> Result<(), String> {
     let registry = RegistryDatabase::open(&command.database_url).await?;
     let bundle: DeviceRegistrationBundle =
@@ -767,17 +816,18 @@ fn print_help() {
     let default_bind = SocketAddr::from((Ipv4Addr::UNSPECIFIED, 7443));
     println!("Usage:");
     println!(
-        "  cargo run -p localmessenger_server -- serve --bind {default_bind} --server-name relay.local --cert /path/cert.pem --key /path/key.pem --db /path/server.db --invite-secret changeme --peer-frame-limit 120 --blob-request-limit 32"
+        "  localmessenger_server gen-cert --server-name relay.local --cert /data/relay-cert.der --key /data/relay-key.der"
     );
     println!(
-        "  cargo run -p localmessenger_server -- create-invite --db /path/server.db --invite-secret changeme --label \"Home relay\" --server-addr 203.0.113.10:7443 --server-name relay.local --cert /path/cert.der --ttl-seconds 86400 --max-uses 4"
-    );
-    println!("  cargo run -p localmessenger_server -- list-invites --db /path/server.db");
-    println!(
-        "  cargo run -p localmessenger_server -- register-device --db /path/server.db --bundle /path/device-bundle.json"
+        "  localmessenger_server serve --bind {default_bind} --server-name relay.local --cert /data/relay-cert.der --key /data/relay-key.der --db /data/relay.db --invite-secret changeme"
     );
     println!(
-        "  cargo run -p localmessenger_server -- disable-device --db /path/server.db --device-id alice-phone"
+        "  localmessenger_server create-invite --db /data/relay.db --invite-secret changeme --label \"Home relay\" --server-addr 203.0.113.10:7443 --server-name relay.local --cert /data/relay-cert.der --ttl-seconds 86400 --max-uses 4"
     );
-    println!("  cargo run -p localmessenger_server -- list-devices --db /path/server.db");
+    println!("  localmessenger_server list-invites --db /data/relay.db");
+    println!(
+        "  localmessenger_server register-device --db /data/relay.db --bundle /path/device-bundle.json"
+    );
+    println!("  localmessenger_server disable-device --db /data/relay.db --device-id alice-phone");
+    println!("  localmessenger_server list-devices --db /data/relay.db");
 }
