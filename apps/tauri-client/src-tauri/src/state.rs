@@ -24,7 +24,10 @@ use crate::relay_client::{
     RelayAuthStatus, RelayClient, RelayClientConfig, RelayServerStatus, TransportRoute,
     resolve_active_route,
 };
-use crate::runtime::{DirectChatRuntime, bootstrap_direct_chat_runtime};
+use crate::runtime::{
+    DirectChatRuntime, GroupChatRuntime, GroupRemoteMemberSpec, bootstrap_direct_chat_runtime,
+    bootstrap_group_chat_runtime,
+};
 
 pub type SharedClientState = Mutex<ClientState>;
 
@@ -34,6 +37,7 @@ pub struct ClientState {
     local_identity_material: IdentityKeyMaterial,
     contacts: Vec<MemberProfile>,
     contact_runtimes: BTreeMap<String, DirectChatRuntime>,
+    group_runtimes: BTreeMap<String, GroupChatRuntime>,
     chat_runtime_device_ids: BTreeMap<String, String>,
     discovered_peers: BTreeMap<String, DiscoveredPeer>,
     discovery_service: Option<DiscoveryService>,
@@ -412,6 +416,46 @@ impl ClientState {
             daria_bootstrap.runtime,
         );
 
+        // ── Group chat runtime — full sender-key fan-out ───────────────────
+        let lan_crew_runtime = bootstrap_group_chat_runtime(
+            &local_reference,
+            &local_identity_material,
+            "lan-crew",
+            "Rimus",
+            vec![
+                GroupRemoteMemberSpec {
+                    member_id: "bob",
+                    display_name: "Bob",
+                    device_id: "grp-bob-phone",
+                    device_name: "Bob Phone",
+                    prekey_seed: 141,
+                    reply_script: vec![
+                        "Got it — group message delivered via sender-key fan-out!",
+                        "Group QUIC path is solid.",
+                    ],
+                },
+                GroupRemoteMemberSpec {
+                    member_id: "carol",
+                    display_name: "Carol",
+                    device_id: "grp-carol-ws",
+                    device_name: "Carol Workstation",
+                    prekey_seed: 151,
+                    reply_script: vec!["Carol here — group crypto is fully live!"],
+                },
+                GroupRemoteMemberSpec {
+                    member_id: "daria",
+                    display_name: "Daria",
+                    device_id: "grp-daria-laptop",
+                    device_name: "Daria Laptop",
+                    prekey_seed: 161,
+                    reply_script: vec![],
+                },
+            ],
+        )
+        .await?;
+        let mut group_runtimes: BTreeMap<String, GroupChatRuntime> = BTreeMap::new();
+        group_runtimes.insert("chat-lan-crew".to_string(), lan_crew_runtime);
+
         let chats = vec![
             ChatThreadView {
                 id: "chat-bob".to_string(),
@@ -447,8 +491,7 @@ impl ClientState {
                         delivery_state: DeliveryStateView::Seen,
                         forwarded_from: None,
                         reply_preview: Some(
-                            "I am back on the local runtime. QUIC path is stable now."
-                                .to_string(),
+                            "I am back on the local runtime. QUIC path is stable now.".to_string(),
                         ),
                         reactions: Vec::new(),
                         attachments: vec![sample_voice_attachment()],
@@ -458,12 +501,11 @@ impl ClientState {
             ChatThreadView {
                 id: "chat-lan-crew".to_string(),
                 title: "LAN Crew".to_string(),
-                summary: "Sender-key orchestration is staged; direct sessions are live."
-                    .to_string(),
-                presence_label: "desktop group bridge staged".to_string(),
-                presence_state: PresenceStateView::Reconnecting,
+                summary: "Sender-key fan-out live · all pairwise sessions active.".to_string(),
+                presence_label: "group session active · 3 members".to_string(),
+                presence_state: PresenceStateView::Online,
                 unread_count: 0,
-                security_label: "Group sender key epoch 4".to_string(),
+                security_label: "Group sender key epoch 0 · verified".to_string(),
                 kind: ChatKindView::Group,
                 participants: vec![
                     "Rimus".to_string(),
@@ -475,8 +517,9 @@ impl ClientState {
                     MessageView {
                         id: "g-1".to_string(),
                         author: "System".to_string(),
-                        body: "Desktop client is using live pairwise sessions; group fan-out is staged."
-                            .to_string(),
+                        body:
+                            "Group session bootstrapped — sender keys exchanged with all 3 members."
+                                .to_string(),
                         timestamp_label: "08:41".to_string(),
                         direction: MessageDirectionView::System,
                         delivery_state: DeliveryStateView::Delivered,
@@ -488,7 +531,7 @@ impl ClientState {
                     MessageView {
                         id: "g-2".to_string(),
                         author: "Carol".to_string(),
-                        body: "Keep the group pane read-only until sender-key fan-out is wired."
+                        body: "Group crypto is live — type a message to test the fan-out."
                             .to_string(),
                         timestamp_label: "08:45".to_string(),
                         direction: MessageDirectionView::Inbound,
@@ -522,10 +565,7 @@ impl ClientState {
                     forwarded_from: Some("LAN Crew".to_string()),
                     reply_preview: None,
                     reactions: Vec::new(),
-                    attachments: vec![
-                        sample_photo_attachment(),
-                        sample_pdf_attachment(),
-                    ],
+                    attachments: vec![sample_photo_attachment(), sample_pdf_attachment()],
                 }],
             },
         ];
@@ -614,6 +654,7 @@ impl ClientState {
             local_identity_material,
             contacts,
             contact_runtimes,
+            group_runtimes,
             chat_runtime_device_ids,
             discovered_peers: BTreeMap::new(),
             discovery_service,
@@ -839,7 +880,76 @@ impl ClientState {
             .find(|chat| chat.id == chat_id)
             .ok_or_else(|| format!("chat '{chat_id}' not found"))?;
         if matches!(chat.kind, ChatKindView::Group) {
-            return Err("group messaging is still staged in the desktop client".to_string());
+            // ── Group message path: encrypt + fan-out via GroupChatRuntime ──
+            self.message_counter = self.message_counter.saturating_add(1);
+            let outbound_message_id = format!("local-{}", self.message_counter);
+            let sent_at_unix_ms = now_unix_ms();
+            let local_author = self.local_profile.display_name().to_string();
+
+            let outcome = {
+                let group_runtime = self
+                    .group_runtimes
+                    .get_mut(chat_id)
+                    .ok_or_else(|| format!("group runtime for '{chat_id}' not found"))?;
+                group_runtime
+                    .send_text(
+                        chat_id,
+                        outbound_message_id.clone(),
+                        sent_at_unix_ms,
+                        trimmed.to_string(),
+                    )
+                    .await?
+            };
+
+            let chat = self
+                .chats
+                .iter_mut()
+                .find(|c| c.id == chat_id)
+                .ok_or_else(|| format!("chat '{chat_id}' not found"))?;
+
+            chat.messages.push(MessageView {
+                id: outbound_message_id,
+                author: local_author,
+                body: trimmed.to_string(),
+                timestamp_label: timestamp_label(sent_at_unix_ms),
+                direction: MessageDirectionView::Outbound,
+                delivery_state: DeliveryStateView::Delivered,
+                forwarded_from: None,
+                reply_preview,
+                reactions: Vec::new(),
+                attachments: Vec::new(),
+            });
+
+            for inbound in &outcome.inbound_messages {
+                chat.messages.push(MessageView {
+                    id: inbound.message_id.clone(),
+                    author: inbound.author.clone(),
+                    body: inbound.body.clone(),
+                    timestamp_label: timestamp_label(inbound.sent_at_unix_ms),
+                    direction: MessageDirectionView::Inbound,
+                    delivery_state: DeliveryStateView::Delivered,
+                    forwarded_from: None,
+                    reply_preview: None,
+                    reactions: Vec::new(),
+                    attachments: Vec::new(),
+                });
+            }
+
+            if let Some(last_msg) = chat.messages.last() {
+                chat.summary = preview(&last_msg.body);
+            }
+            chat.presence_label = format!(
+                "group session active · {} of {} members reached",
+                outcome.members_reached, outcome.members_reached,
+            );
+            chat.presence_state = PresenceStateView::Online;
+            let inbound_count = outcome.inbound_messages.len() as u32;
+            if inbound_count > 0 {
+                chat.unread_count = chat.unread_count.saturating_add(inbound_count);
+                let chat_title = chat.title.clone();
+                self.push_notification(format!("New messages in {chat_title}"));
+            }
+            return Ok(());
         }
 
         let remote_device_id = self
@@ -2019,6 +2129,74 @@ mod tests {
             .and_then(|chat| chat.messages.iter().find(|message| message.id == "c-1"))
             .expect("reacted message");
         assert!(reacted.reactions.iter().any(|reaction| reaction == "👍"));
+    }
+
+    #[tokio::test]
+    async fn group_send_message_fan_out_delivers_and_receives_replies() {
+        let mut state = ClientState::bootstrap()
+            .await
+            .expect("client state should bootstrap");
+
+        // Verify the group chat is live (not staged) after bootstrap.
+        let snapshot = state.snapshot();
+        let group_chat = snapshot
+            .chats
+            .iter()
+            .find(|chat| chat.id == "chat-lan-crew")
+            .expect("LAN Crew chat should exist");
+        assert!(
+            matches!(group_chat.presence_state, super::PresenceStateView::Online),
+            "group must be online after bootstrap"
+        );
+        assert!(
+            group_chat.security_label.contains("epoch 0"),
+            "security label should contain epoch"
+        );
+
+        // Send a group message — this must NOT return the old stub error.
+        state
+            .send_message("chat-lan-crew", "Hello group!", None)
+            .await
+            .expect("group send should succeed");
+
+        let snapshot = state.snapshot();
+        let chat = snapshot
+            .chats
+            .iter()
+            .find(|chat| chat.id == "chat-lan-crew")
+            .expect("LAN Crew chat should exist after send");
+
+        // Our outbound message must be visible.
+        let outbound = chat
+            .messages
+            .iter()
+            .find(|msg| {
+                matches!(msg.direction, super::MessageDirectionView::Outbound)
+                    && msg.body == "Hello group!"
+            })
+            .expect("outbound group message should appear in chat");
+        assert!(
+            matches!(outbound.delivery_state, super::DeliveryStateView::Delivered),
+            "delivery state should be Delivered"
+        );
+
+        // At least one reply from a member with a reply script should appear.
+        let inbound_count = chat
+            .messages
+            .iter()
+            .filter(|msg| matches!(msg.direction, super::MessageDirectionView::Inbound))
+            .count();
+        assert!(
+            inbound_count >= 1,
+            "at least one group member should have replied; got {inbound_count}"
+        );
+
+        // Presence label must reflect how many members were reached.
+        assert!(
+            chat.presence_label.contains("members reached"),
+            "presence label should report members reached: {}",
+            chat.presence_label
+        );
     }
 
     #[tokio::test]
