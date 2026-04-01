@@ -1,1 +1,37 @@
+# Rust build artifacts
 /target
+
+# Node / npm
+node_modules/
+apps/tauri-client/node_modules/
+
+# Frontend build output
+dist/
+apps/tauri-client/dist/
+
+# Vite dev-server / dependency cache
+apps/tauri-client/node_modules/.vite/
+
+# Tauri generated files
+apps/tauri-client/src-tauri/gen/
+
+# SQLite databases (local dev)
+*.db
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# TLS key material generated during local testing
+*.der
+*.pem
+*.key
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
