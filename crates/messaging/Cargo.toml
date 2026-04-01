@@ -16,9 +16,8 @@ localmessenger_transport = { path = "../transport" }
 rand_core.workspace = true
 serde.workspace = true
 sha2.workspace = true
-
-[dev-dependencies]
 tokio.workspace = true
 
+[dev-dependencies]
 [lints]
 workspace = true

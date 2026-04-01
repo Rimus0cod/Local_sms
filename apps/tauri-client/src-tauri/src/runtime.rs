@@ -4,11 +4,10 @@ use localmessenger_core::{Device, DeviceId, MemberId, MemberProfile};
 use localmessenger_crypto::{IdentityKeyMaterial, IdentityKeyPair, LocalPrekeyStore};
 use localmessenger_discovery::{DiscoveredPeer, PeerCapability};
 use localmessenger_messaging::{
-    MessageKind, MessagingEngine, SecureSession, SessionInitiator, SessionResponder,
+    InMemoryFrameChannel, MessageKind, MessagingEngine, SecureSession, SessionInitiator,
+    SessionResponder,
 };
-use localmessenger_transport::{
-    ReconnectPolicy, TransportEndpoint, TransportEndpointConfig, TransportIdentity,
-};
+use localmessenger_transport::TransportIdentity;
 use rand_core::OsRng;
 
 pub struct BootstrapRuntime {
@@ -179,20 +178,9 @@ pub async fn bootstrap_direct_chat_runtime(
         .add_device(remote_device.clone())
         .map_err(|error| error.to_string())?;
 
-    let server_config =
-        TransportEndpointConfig::recommended(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
-    let server_identity = TransportIdentity::generate(server_config.server_name.clone())
-        .map_err(|error| error.to_string())?;
-    let server = TransportEndpoint::bind(server_config, server_identity.clone())
-        .map_err(|error| error.to_string())?;
-    let server_addr = server.local_addr().map_err(|error| error.to_string())?;
-
-    let client_config =
-        TransportEndpointConfig::recommended(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
-    let client_identity = TransportIdentity::generate(client_config.server_name.clone())
-        .map_err(|error| error.to_string())?;
-    let client = TransportEndpoint::bind(client_config, client_identity)
-        .map_err(|error| error.to_string())?;
+    let server_identity =
+        TransportIdentity::generate("runtime.local").map_err(|error| error.to_string())?;
+    let (client_channel, server_channel) = InMemoryFrameChannel::pair();
 
     let remote_prekeys = LocalPrekeyStore::generate(
         &mut rng,
@@ -213,28 +201,19 @@ pub async fn bootstrap_direct_chat_runtime(
         .map_err(|error| error.to_string())?;
 
     let accept_task = tokio::spawn(async move {
-        let connection = server.accept().await.map_err(|error| error.to_string())?;
         responder
-            .accept(connection)
+            .accept(server_channel)
             .await
             .map_err(|error| error.to_string())
     });
 
-    let connection = client
-        .connect(
-            server_addr,
-            &server_identity.certificate_der,
-            &ReconnectPolicy::lan_default(),
-        )
-        .await
-        .map_err(|error| error.to_string())?;
     let initiator = SessionInitiator::new(
         local_device.clone(),
         IdentityKeyPair::from_material(local_identity_material),
     )
     .map_err(|error| error.to_string())?;
     let local_session = initiator
-        .establish(connection, &offer, &server_identity.certificate_der)
+        .establish(client_channel, &offer, &server_identity.certificate_der)
         .await
         .map_err(|error| error.to_string())?;
     let remote_session = accept_task.await.map_err(|error| error.to_string())??;
@@ -244,11 +223,8 @@ pub async fn bootstrap_direct_chat_runtime(
         member_id: remote_member.member_id().clone(),
         device_id: remote_device_id_value.clone(),
         device_name: remote_device_name.to_string(),
-        port: server_addr.port(),
-        socket_address: Some(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            server_addr.port(),
-        )),
+        port: 7443,
+        socket_address: Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7443)),
         hostname: Some("runtime.local".to_string()),
         capabilities,
     };

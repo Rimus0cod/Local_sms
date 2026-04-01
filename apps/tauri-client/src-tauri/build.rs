@@ -3,7 +3,14 @@ fn main() {
         "load_client_snapshot",
         "refresh_peer_discovery",
         "send_message",
+        "send_media",
+        "toggle_reaction",
+        "forward_message",
         "verify_device",
+        "export_device_registration",
+        "preview_invite",
+        "accept_invite",
+        "check_for_updates",
     ]);
 
     if let Err(error) =

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod channel;
 mod engine;
 mod envelope;
 mod error;
@@ -7,6 +8,7 @@ mod group;
 mod handshake;
 mod session;
 
+pub use channel::{FrameChannel, InMemoryFrameChannel};
 pub use engine::{DeliveredMessage, MessagingEngine, OutgoingMessage, ReceiveOutcome};
 pub use envelope::MessageKind;
 pub use error::MessagingError;
@@ -21,18 +23,14 @@ pub use session::{
 
 #[cfg(test)]
 mod tests {
-    use std::net::{Ipv4Addr, SocketAddr};
-
     use localmessenger_core::{Device, DeviceId, MemberId};
     use localmessenger_crypto::{IdentityKeyPair, LocalPrekeyStore, SessionRole};
-    use localmessenger_transport::{
-        ReconnectPolicy, TransportEndpoint, TransportEndpointConfig, TransportIdentity,
-    };
+    use localmessenger_transport::TransportIdentity;
     use rand_core::OsRng;
 
     use crate::{
-        MessageKind, MessagingEngine, MessagingError, RemoteSessionOffer, SecureSession,
-        SessionInitiator, SessionResponder, transport_certificate_sha256,
+        InMemoryFrameChannel, MessageKind, MessagingEngine, MessagingError, RemoteSessionOffer,
+        SecureSession, SessionInitiator, SessionResponder, transport_certificate_sha256,
     };
 
     struct SessionPair {
@@ -59,20 +57,9 @@ mod tests {
     }
 
     async fn establish_session_pair() -> SessionPair {
-        let server_config =
-            TransportEndpointConfig::recommended(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
-        let server_identity = TransportIdentity::generate(server_config.server_name.clone())
+        let bob_transport_identity = TransportIdentity::generate("bob.runtime.local")
             .expect("server transport identity should generate");
-        let server = TransportEndpoint::bind(server_config, server_identity.clone())
-            .expect("server endpoint should bind");
-        let server_addr = server.local_addr().expect("server address should exist");
-
-        let client_config =
-            TransportEndpointConfig::recommended(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
-        let client_identity = TransportIdentity::generate(client_config.server_name.clone())
-            .expect("client transport identity should generate");
-        let client = TransportEndpoint::bind(client_config, client_identity)
-            .expect("client endpoint should bind");
+        let (alice_channel, bob_channel) = InMemoryFrameChannel::pair();
 
         let mut rng = OsRng;
         let alice_identity = IdentityKeyPair::generate(&mut rng);
@@ -86,7 +73,7 @@ mod tests {
             bob_device.clone(),
             bob_identity,
             bob_prekeys,
-            &server_identity.certificate_der,
+            &bob_transport_identity.certificate_der,
         )
         .expect("responder context should build");
         let offer = responder
@@ -94,28 +81,20 @@ mod tests {
             .expect("remote session offer should build");
 
         let accept_task = tokio::spawn(async move {
-            let connection = server
-                .accept()
-                .await
-                .expect("server should accept transport");
             responder
-                .accept(connection)
+                .accept(bob_channel)
                 .await
                 .expect("secure session should accept")
         });
 
-        let connection = client
-            .connect(
-                server_addr,
-                &server_identity.certificate_der,
-                &ReconnectPolicy::lan_default(),
-            )
-            .await
-            .expect("client should connect");
         let initiator = SessionInitiator::new(alice_device.clone(), alice_identity)
             .expect("initiator context should build");
         let alice_session = initiator
-            .establish(connection, &offer, &server_identity.certificate_der)
+            .establish(
+                alice_channel,
+                &offer,
+                &bob_transport_identity.certificate_der,
+            )
             .await
             .expect("initiator should establish secure session");
         let bob_session = accept_task.await.expect("join should succeed");
@@ -125,7 +104,7 @@ mod tests {
             bob_device,
             alice_session,
             bob_session,
-            bob_transport_identity: server_identity,
+            bob_transport_identity,
         }
     }
 
@@ -181,20 +160,9 @@ mod tests {
 
     #[tokio::test]
     async fn initiator_rejects_transport_binding_mismatch_before_handshake() {
-        let server_config =
-            TransportEndpointConfig::recommended(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
-        let server_identity = TransportIdentity::generate(server_config.server_name.clone())
+        let server_identity = TransportIdentity::generate("relay.local")
             .expect("server transport identity should generate");
-        let server = TransportEndpoint::bind(server_config, server_identity.clone())
-            .expect("server endpoint should bind");
-        let server_addr = server.local_addr().expect("server address should exist");
-
-        let client_config =
-            TransportEndpointConfig::recommended(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
-        let client_identity = TransportIdentity::generate(client_config.server_name.clone())
-            .expect("client transport identity should generate");
-        let client = TransportEndpoint::bind(client_config, client_identity)
-            .expect("client endpoint should bind");
+        let (alice_channel, bob_channel) = InMemoryFrameChannel::pair();
 
         let wrong_transport_identity = TransportIdentity::generate("wrong.local")
             .expect("wrong transport identity should generate");
@@ -224,32 +192,17 @@ mod tests {
             transport_certificate_sha256(&wrong_transport_identity.certificate_der),
         )
         .expect("mismatched offer should still be constructible");
-        let accept_task = tokio::spawn(async move {
-            let connection = server
-                .accept()
-                .await
-                .expect("server should accept transport");
-            connection.close("test complete");
-        });
+        drop(bob_channel);
 
-        let connection = client
-            .connect(
-                server_addr,
-                &server_identity.certificate_der,
-                &ReconnectPolicy::lan_default(),
-            )
-            .await
-            .expect("client should connect");
         let initiator = SessionInitiator::new(alice_device, alice_identity)
             .expect("initiator context should build");
 
         let error = initiator
-            .establish(connection, &offer, &server_identity.certificate_der)
+            .establish(alice_channel, &offer, &server_identity.certificate_der)
             .await
             .err()
             .expect("mismatched binding must fail");
         assert!(matches!(error, MessagingError::TransportBindingMismatch));
-        accept_task.await.expect("accept task should join");
     }
 
     #[tokio::test]

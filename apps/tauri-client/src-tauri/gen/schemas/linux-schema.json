@@ -177,10 +177,40 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the accept_invite command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-accept-invite",
+          "markdownDescription": "Enables the accept_invite command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_for_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-for-updates",
+          "markdownDescription": "Enables the check_for_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the export_device_registration command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-device-registration",
+          "markdownDescription": "Enables the export_device_registration command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the forward_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-forward-message",
+          "markdownDescription": "Enables the forward_message command without any pre-configured scope."
+        },
+        {
           "description": "Enables the load_client_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "allow-load-client-snapshot",
           "markdownDescription": "Enables the load_client_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preview_invite command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-invite",
+          "markdownDescription": "Enables the preview_invite command without any pre-configured scope."
         },
         {
           "description": "Enables the refresh_peer_discovery command without any pre-configured scope.",
@@ -189,10 +219,22 @@
           "markdownDescription": "Enables the refresh_peer_discovery command without any pre-configured scope."
         },
         {
+          "description": "Enables the send_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-send-media",
+          "markdownDescription": "Enables the send_media command without any pre-configured scope."
+        },
+        {
           "description": "Enables the send_message command without any pre-configured scope.",
           "type": "string",
           "const": "allow-send-message",
           "markdownDescription": "Enables the send_message command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the toggle_reaction command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-toggle-reaction",
+          "markdownDescription": "Enables the toggle_reaction command without any pre-configured scope."
         },
         {
           "description": "Enables the verify_device command without any pre-configured scope.",
@@ -201,10 +243,40 @@
           "markdownDescription": "Enables the verify_device command without any pre-configured scope."
         },
         {
+          "description": "Denies the accept_invite command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-accept-invite",
+          "markdownDescription": "Denies the accept_invite command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_for_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-for-updates",
+          "markdownDescription": "Denies the check_for_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the export_device_registration command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-device-registration",
+          "markdownDescription": "Denies the export_device_registration command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the forward_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-forward-message",
+          "markdownDescription": "Denies the forward_message command without any pre-configured scope."
+        },
+        {
           "description": "Denies the load_client_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "deny-load-client-snapshot",
           "markdownDescription": "Denies the load_client_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_invite command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-invite",
+          "markdownDescription": "Denies the preview_invite command without any pre-configured scope."
         },
         {
           "description": "Denies the refresh_peer_discovery command without any pre-configured scope.",
@@ -213,10 +285,22 @@
           "markdownDescription": "Denies the refresh_peer_discovery command without any pre-configured scope."
         },
         {
+          "description": "Denies the send_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-send-media",
+          "markdownDescription": "Denies the send_media command without any pre-configured scope."
+        },
+        {
           "description": "Denies the send_message command without any pre-configured scope.",
           "type": "string",
           "const": "deny-send-message",
           "markdownDescription": "Denies the send_message command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the toggle_reaction command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-toggle-reaction",
+          "markdownDescription": "Denies the toggle_reaction command without any pre-configured scope."
         },
         {
           "description": "Denies the verify_device command without any pre-configured scope.",

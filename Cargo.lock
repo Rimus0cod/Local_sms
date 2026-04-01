@@ -2570,6 +2570,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "localmessenger_server"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bincode",
+ "ed25519-dalek",
+ "localmessenger_core",
+ "localmessenger_crypto",
+ "localmessenger_server_protocol",
+ "localmessenger_transport",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
+name = "localmessenger_server_protocol"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "hmac",
+ "localmessenger_core",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "localmessenger_storage"
 version = "0.1.0"
 dependencies = [
@@ -2590,14 +2620,19 @@ dependencies = [
 name = "localmessenger_tauri_client"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "bincode",
  "localmessenger_core",
  "localmessenger_crypto",
  "localmessenger_discovery",
  "localmessenger_messaging",
+ "localmessenger_server_protocol",
  "localmessenger_transport",
  "rand_core 0.6.4",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tokio",

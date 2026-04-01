@@ -14,6 +14,11 @@ This repository now follows the target monorepo layout and has working implement
 - `STEP 8 — Group Messaging` in `crates/messaging`
 - `STEP 9 — Tauri Client` in `apps/tauri-client`
 - `STEP 10 — Security Hardening` across `crates/crypto`, `crates/messaging`, and `docs/`
+- `SPRINT 1 — QUIC Relay Server with LAN Fallback` across `apps/localmessenger_server`, `crates/server_protocol`, `crates/messaging`, and `apps/tauri-client`
+- `SPRINT 2 — Offline Queue + Signed Invites + Client Onboarding` across `apps/localmessenger_server`, `crates/server_protocol`, and `apps/tauri-client`
+- `SPRINT 3 — Media Files` across `apps/localmessenger_server`, `crates/server_protocol`, and `apps/tauri-client`
+- `SPRINT 4 — Statuses + Notifications + Voice` in `apps/tauri-client`
+- `SPRINT 5 — UI Polish + Hardening` across `apps/localmessenger_server` and `apps/tauri-client`
 
 ## Monorepo layout
 
@@ -40,6 +45,11 @@ This repository now follows the target monorepo layout and has working implement
 - `crates/messaging` contains the secure-session handshake, a reliable pairwise messaging engine, and a group sender-key layer with epoch rotation.
 - `crates/storage` contains encrypted-at-rest SQLite persistence for devices, peers, message blobs, and local key material.
 - `apps/tauri-client` contains a Tauri 2 + React + Zustand desktop client with a live Rust backend for direct secure chats, peer surfaces, and device verification.
+- `apps/tauri-client` now also exposes delivery glyphs, online indicators, tray notifications, and voice-note recording/playback on top of the existing media flow.
+- `apps/tauri-client` now also exposes reply/forward/reaction actions, PDF previews, and updater status surfaced from the desktop backend.
+- `apps/localmessenger_server` contains a QUIC relay server with SQLite registry, challenge-response device auth, and manual registration CLI commands.
+- `apps/localmessenger_server` now also enforces per-device in-memory rate limiting for relay and blob operations.
+- `crates/server_protocol` contains the shared relay auth and forwarding wire types.
 
 ## Crypto layer scope
 
@@ -125,9 +135,27 @@ This repository now follows the target monorepo layout and has working implement
 - forward-secrecy state snapshots for Double Ratchet and secure-session validation tests
 - rotation reasons for manual rekey and device-compromise driven epoch changes
 
+## Relay server scope
+
+- QUIC relay server with manual device registration
+- Ed25519 challenge-response device auth
+- opaque encrypted peer-frame forwarding for online recipients
+- persistent store-and-forward queue for offline recipients
+- HMAC-SHA256 signed invite links with max-use and expiry tracking
+- desktop relay config with direct-LAN fallback
+- device-registration bundle export and invite onboarding flow in the desktop client
+- chunked encrypted blob upload/download for media up to 5 MB
+- direct QUIC handoff for larger files
+- desktop photo preview rendering for media messages
+- PDF preview rendering for document messages
+- Telegram-style reply/forward/reaction controls in the desktop client
+- release-time Tauri updater artifact generation
+
 ## Important note
 
 This uses audited primitive libraries, and the current stack now includes reliable pairwise delivery plus a group sender-key foundation on top of encrypted sessions. A secure product still requires durable pending-queue persistence across restarts, authenticated sender-key distribution over real fan-out flows, attachment storage, and end-to-end threat validation before real deployment.
+
+Sprint 3 adds encrypted relay blob storage for small media plus direct QUIC transfer for larger files. The desktop client now renders photo previews, but real cross-device relay-backed media exchange is still only fully exercised through the backend flow rather than a full remote peer directory.
 
 ## Useful commands
 
@@ -137,3 +165,5 @@ cargo test
 npm install --prefix apps/tauri-client
 npm run build --prefix apps/tauri-client
 ```
+
+Relay setup details and environment examples live in [docs/server-relay.md](/home/diff/Local_sms/docs/server-relay.md).

@@ -20,6 +20,8 @@ export function PeerDiscoveryPanel({
   busy,
   onRefresh,
 }: PeerDiscoveryPanelProps) {
+  const onlinePeers = peers.filter((peer) => peer.state === "live").length;
+
   return (
     <section className="panel context-card">
       <div className="panel-header">
@@ -53,6 +55,24 @@ export function PeerDiscoveryPanel({
         <div className="status-tile">
           <span>{copy.storageLabel}</span>
           <strong>{transportStatus.storageMode}</strong>
+        </div>
+        <div className="status-tile">
+          <span>Relay server</span>
+          <strong>{transportStatus.serverStatus}</strong>
+        </div>
+        <div className="status-tile">
+          <span>Relay auth</span>
+          <strong>{transportStatus.authStatus}</strong>
+        </div>
+        <div className="status-tile">
+          <span>Active route</span>
+          <strong>{transportStatus.activeRoute}</strong>
+        </div>
+        <div className="status-tile">
+          <span>Peers online</span>
+          <strong>
+            {onlinePeers}/{peers.length}
+          </strong>
         </div>
       </div>
 

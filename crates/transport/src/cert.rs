@@ -19,6 +19,18 @@ pub struct TransportIdentity {
 }
 
 impl TransportIdentity {
+    pub fn from_der(
+        server_name: impl Into<String>,
+        certificate_der: Vec<u8>,
+        private_key_der: Vec<u8>,
+    ) -> Self {
+        Self {
+            server_name: server_name.into(),
+            certificate_der,
+            private_key_der,
+        }
+    }
+
     pub fn generate(server_name: impl Into<String>) -> Result<Self, TransportError> {
         let server_name = server_name.into();
         let CertifiedKey { cert, signing_key } =

@@ -25,6 +25,7 @@ mod tests {
     };
 
     #[tokio::test]
+    #[ignore = "network-required: binds UDP sockets"]
     async fn quic_frame_round_trip_over_loopback() {
         let server_config =
             TransportEndpointConfig::recommended(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
@@ -69,6 +70,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "network-required: binds UDP sockets"]
     async fn connect_retries_until_server_appears() {
         let reserved = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("port should reserve");
         let server_addr = reserved.local_addr().expect("reserved addr should exist");

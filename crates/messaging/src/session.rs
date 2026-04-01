@@ -1,9 +1,10 @@
+use crate::channel::FrameChannel;
 use localmessenger_core::Device;
 use localmessenger_crypto::{
     DoubleRatchet, EncryptedMessage, IdentityKeyPair, LocalPrekeyStore, PublicPrekeyBundle,
     RatchetStateSnapshot, SessionRole, accept_session, initiate_session,
 };
-use localmessenger_transport::{TransportConnection, TransportFrame};
+use localmessenger_transport::TransportFrame;
 use rand_core::OsRng;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -76,7 +77,7 @@ impl SessionInitiator {
 
     pub async fn establish(
         &self,
-        connection: TransportConnection,
+        connection: impl FrameChannel + 'static,
         remote_offer: &RemoteSessionOffer,
         trusted_remote_transport_certificate_der: &[u8],
     ) -> Result<SecureSession, MessagingError> {
@@ -177,7 +178,7 @@ impl SessionResponder {
 
     pub async fn accept(
         &mut self,
-        connection: TransportConnection,
+        connection: impl FrameChannel + 'static,
     ) -> Result<SecureSession, MessagingError> {
         let frame = connection.receive_frame().await?;
         let request_bytes = expect_handshake(frame, "expected handshake request")?;
@@ -239,7 +240,7 @@ pub struct SecureSession {
     local_device: Device,
     remote_device: Device,
     remote_transport_certificate_sha256: Option<[u8; 32]>,
-    connection: TransportConnection,
+    channel: Box<dyn FrameChannel>,
     ratchet: DoubleRatchet,
     session_id: [u8; 32],
     associated_data: Vec<u8>,
@@ -250,7 +251,7 @@ impl SecureSession {
         local_device: Device,
         remote_device: Device,
         remote_transport_certificate_sha256: Option<[u8; 32]>,
-        connection: TransportConnection,
+        channel: impl FrameChannel + 'static,
         ratchet: DoubleRatchet,
         binding: SessionBinding,
     ) -> Result<Self, MessagingError> {
@@ -261,7 +262,7 @@ impl SecureSession {
             local_device,
             remote_device,
             remote_transport_certificate_sha256,
-            connection,
+            channel: Box::new(channel),
             ratchet,
             session_id,
             associated_data,
@@ -294,14 +295,14 @@ impl SecureSession {
 
     pub async fn send_encrypted(&mut self, plaintext: &[u8]) -> Result<(), MessagingError> {
         let encrypted = self.ratchet.encrypt(plaintext, &self.associated_data)?;
-        self.connection
+        self.channel
             .send_frame(&TransportFrame::payload(bincode::serialize(&encrypted)?))
             .await?;
         Ok(())
     }
 
     pub async fn receive_encrypted(&mut self) -> Result<Vec<u8>, MessagingError> {
-        let frame = self.connection.receive_frame().await?;
+        let frame = self.channel.receive_frame().await?;
         let payload = match frame {
             TransportFrame::Payload(payload) => payload,
             _ => {
@@ -315,7 +316,7 @@ impl SecureSession {
     }
 
     pub fn close(&self, reason: &'static str) {
-        self.connection.close(reason);
+        self.channel.close(reason);
     }
 }
 

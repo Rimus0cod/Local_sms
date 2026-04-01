@@ -79,6 +79,10 @@ impl IdentityKeyPair {
         let payload = signed_prekey_payload(prekey_id, prekey_public);
         self.signing_key.sign(&payload).to_bytes()
     }
+
+    pub fn sign_message(&self, payload: &[u8]) -> [u8; 64] {
+        self.signing_key.sign(payload).to_bytes()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +107,18 @@ impl IdentityPublicKeys {
         let signature = Signature::from_bytes(&signature);
         verifying_key
             .verify(&payload, &signature)
+            .map_err(|_| CryptoError::InvalidSignature)
+    }
+
+    pub fn verify_message(&self, payload: &[u8], signature: &[u8]) -> Result<(), CryptoError> {
+        let verifying_key = VerifyingKey::from_bytes(&self.signing_public_key)
+            .map_err(|_| CryptoError::InvalidSignature)?;
+        let signature: [u8; 64] = signature
+            .try_into()
+            .map_err(|_| CryptoError::InvalidSignature)?;
+        let signature = Signature::from_bytes(&signature);
+        verifying_key
+            .verify(payload, &signature)
             .map_err(|_| CryptoError::InvalidSignature)
     }
 }
