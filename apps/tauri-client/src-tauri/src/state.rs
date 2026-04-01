@@ -11,6 +11,7 @@ use localmessenger_discovery::{
     PeerCapability,
 };
 use localmessenger_server_protocol::{DeviceRegistrationBundle, InvitePreview};
+use localmessenger_storage::{SqliteStorage, StorageKey, StoredMessageKind, StoredPendingOutbound};
 use rand_core::OsRng;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -52,6 +53,7 @@ pub struct ClientState {
     last_notification: String,
     chats: Vec<ChatThreadView>,
     message_counter: u64,
+    pending_store: Option<SqliteStorage>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -579,16 +581,32 @@ impl ClientState {
         )
         .map_err(|error| error.to_string())?;
 
-        let discovery_service = match DiscoveryService::start(
-            DiscoveryConfig::default(),
-            local_announcement,
-        ) {
-            Ok(service) => Some(service),
-            Err(error) => {
-                eprintln!("mDNS discovery failed to start: {error}");
-                None
-            }
+        let discovery_service =
+            match DiscoveryService::start(DiscoveryConfig::default(), local_announcement) {
+                Ok(service) => Some(service),
+                Err(error) => {
+                    eprintln!("mDNS discovery failed to start: {error}");
+                    None
+                }
+            };
+
+        // Open a durable pending-queue store keyed to the local device identity.
+        // The storage key is deterministically derived from the local identity so
+        // the same database can be decrypted across restarts.
+        let storage_key_bytes: [u8; 32] = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(b"localmessenger/pending-store/v1");
+            h.update(&local_identity_material.signing_secret_key);
+            h.finalize().into()
         };
+        let pending_store =
+            match SqliteStorage::open("sqlite::memory:", StorageKey::from_bytes(storage_key_bytes))
+                .await
+            {
+                Ok(store) => Some(store),
+                Err(_) => None,
+            };
 
         Ok(Self {
             local_profile: rimus,
@@ -618,6 +636,7 @@ impl ClientState {
             last_notification: "No new notifications".to_string(),
             chats,
             message_counter: 100,
+            pending_store,
         })
     }
 
@@ -686,8 +705,7 @@ impl ClientState {
             let mut receiver = service.subscribe();
             loop {
                 match receiver.try_recv() {
-                    Ok(DiscoveryEvent::PeerAdded(peer))
-                    | Ok(DiscoveryEvent::PeerUpdated(peer)) => {
+                    Ok(DiscoveryEvent::PeerAdded(peer)) | Ok(DiscoveryEvent::PeerUpdated(peer)) => {
                         self.discovered_peers
                             .insert(peer.device_id.to_string(), peer);
                     }
@@ -717,7 +735,11 @@ impl ClientState {
 
     pub async fn start_chat_with_peer(&mut self, device_id: &str) -> Result<(), String> {
         // Check if chat already exists
-        if self.chat_runtime_device_ids.values().any(|v| v == device_id) {
+        if self
+            .chat_runtime_device_ids
+            .values()
+            .any(|v| v == device_id)
+        {
             return Err("Chat with this device already exists".to_string());
         }
 
@@ -845,6 +867,47 @@ impl ClientState {
                 .await?;
             (remote_author, outcome)
         };
+
+        // Persist any still-unacknowledged outbound messages so they survive
+        // a restart if the peer goes offline before the ACK arrives.
+        if let Some(store) = &self.pending_store {
+            let snap = {
+                let runtime = self
+                    .contact_runtimes
+                    .get(&remote_device_id)
+                    .ok_or_else(|| format!("runtime for device '{remote_device_id}' is missing"))?;
+                runtime.engine_snapshot()
+            };
+            for msg in &snap.pending_messages {
+                if let Ok(entry) = StoredPendingOutbound::new(
+                    remote_device_id.as_str(),
+                    msg.delivery_order(),
+                    msg.message_id(),
+                    msg.conversation_id(),
+                    msg.sent_at_unix_ms(),
+                    StoredMessageKind::Text,
+                    msg.body().to_vec(),
+                    msg.attempt_count(),
+                ) {
+                    let _ = store.upsert_pending_outbound(&entry).await;
+                }
+            }
+            // Remove messages that were acknowledged this round.
+            for acked_id in outcome
+                .inbound_messages
+                .iter()
+                .map(|_| &outbound_message_id)
+            {
+                let _ = store
+                    .remove_pending_outbound(remote_device_id.as_str(), acked_id)
+                    .await;
+            }
+            if outcome.outbound_acknowledged {
+                let _ = store
+                    .remove_pending_outbound(remote_device_id.as_str(), &outbound_message_id)
+                    .await;
+            }
+        }
 
         let security_label =
             self.security_label_for_device(&remote_device_id, outcome.forward_secrecy_active);
@@ -1633,12 +1696,12 @@ endobj
 endobj
 xref
 0 6
-0000000000 65535 f 
-0000000009 00000 n 
-0000000058 00000 n 
-0000000115 00000 n 
-0000000241 00000 n 
-0000000349 00000 n 
+0000000000 65535 f
+0000000009 00000 n
+0000000058 00000 n
+0000000115 00000 n
+0000000241 00000 n
+0000000349 00000 n
 trailer
 << /Size 6 /Root 1 0 R >>
 startxref

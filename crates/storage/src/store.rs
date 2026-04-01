@@ -8,13 +8,16 @@ use sqlx::{Pool, Row, Sqlite};
 
 use crate::cipher::AtRestCipher;
 use crate::error::StorageError;
-use crate::models::{StorageKey, StoredLocalDeviceSecrets, StoredMessage, validate_identifier};
+use crate::models::{
+    StorageKey, StoredLocalDeviceSecrets, StoredMessage, StoredPendingOutbound, validate_identifier,
+};
 
 const DEVICE_NAMESPACE: &str = "device";
 const LOCAL_SECRETS_NAMESPACE: &str = "local-device-secrets";
 const PEER_NAMESPACE: &str = "peer";
 const MESSAGE_NAMESPACE: &str = "message";
 const CONVERSATION_NAMESPACE: &str = "conversation";
+const PENDING_NAMESPACE: &str = "pending-outbound";
 
 pub struct SqliteStorage {
     pool: Pool<Sqlite>,
@@ -232,6 +235,92 @@ impl SqliteStorage {
             .collect()
     }
 
+    pub async fn upsert_pending_outbound(
+        &self,
+        entry: &StoredPendingOutbound,
+    ) -> Result<(), StorageError> {
+        let peer_key = opaque_lookup_key(PENDING_NAMESPACE, &entry.peer_device_id);
+        let message_key = opaque_lookup_key(PENDING_NAMESPACE, &entry.message_id);
+        let blob = self
+            .cipher
+            .encrypt(PENDING_NAMESPACE, &message_key, entry)?;
+        sqlx::query(
+            r#"
+            INSERT INTO pending_outbound_queue (peer_key, message_key, delivery_order, encrypted_blob)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(message_key) DO UPDATE SET
+                delivery_order = excluded.delivery_order,
+                encrypted_blob = excluded.encrypted_blob
+            "#,
+        )
+        .bind(peer_key.to_vec())
+        .bind(message_key.to_vec())
+        .bind(entry.delivery_order as i64)
+        .bind(blob)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn pending_outbound_for_peer(
+        &self,
+        peer_device_id: &str,
+    ) -> Result<Vec<StoredPendingOutbound>, StorageError> {
+        validate_identifier("peer_device_id", peer_device_id)?;
+        let peer_key = opaque_lookup_key(PENDING_NAMESPACE, peer_device_id);
+        let rows = sqlx::query(
+            r#"
+            SELECT message_key, encrypted_blob
+            FROM pending_outbound_queue
+            WHERE peer_key = ?
+            ORDER BY delivery_order
+            "#,
+        )
+        .bind(peer_key.to_vec())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let message_key: Vec<u8> = row.try_get("message_key")?;
+                let encrypted_blob: Vec<u8> = row.try_get("encrypted_blob")?;
+                let key: [u8; 32] = message_key
+                    .try_into()
+                    .map_err(|_| StorageError::DecryptionFailed)?;
+                self.cipher
+                    .decrypt(PENDING_NAMESPACE, &key, &encrypted_blob)
+            })
+            .collect()
+    }
+
+    pub async fn remove_pending_outbound(
+        &self,
+        peer_device_id: &str,
+        message_id: &str,
+    ) -> Result<(), StorageError> {
+        validate_identifier("peer_device_id", peer_device_id)?;
+        validate_identifier("message_id", message_id)?;
+        let message_key = opaque_lookup_key(PENDING_NAMESPACE, message_id);
+        sqlx::query("DELETE FROM pending_outbound_queue WHERE message_key = ?")
+            .bind(message_key.to_vec())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn clear_pending_outbound_for_peer(
+        &self,
+        peer_device_id: &str,
+    ) -> Result<(), StorageError> {
+        validate_identifier("peer_device_id", peer_device_id)?;
+        let peer_key = opaque_lookup_key(PENDING_NAMESPACE, peer_device_id);
+        sqlx::query("DELETE FROM pending_outbound_queue WHERE peer_key = ?")
+            .bind(peer_key.to_vec())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) async fn raw_encrypted_blobs(
         &self,
@@ -271,6 +360,16 @@ impl SqliteStorage {
 
             CREATE INDEX IF NOT EXISTS idx_message_log_conversation
             ON message_log (conversation_key, ordinal);
+
+            CREATE TABLE IF NOT EXISTS pending_outbound_queue (
+                peer_key BLOB NOT NULL,
+                message_key BLOB NOT NULL UNIQUE,
+                delivery_order INTEGER NOT NULL,
+                encrypted_blob BLOB NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_pending_outbound_peer
+            ON pending_outbound_queue (peer_key, delivery_order);
             "#,
         )
         .execute(&self.pool)

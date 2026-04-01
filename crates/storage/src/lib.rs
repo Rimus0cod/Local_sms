@@ -6,7 +6,9 @@ mod models;
 mod store;
 
 pub use error::StorageError;
-pub use models::{StorageKey, StoredLocalDeviceSecrets, StoredMessage, StoredMessageKind};
+pub use models::{
+    StorageKey, StoredLocalDeviceSecrets, StoredMessage, StoredMessageKind, StoredPendingOutbound,
+};
 pub use store::SqliteStorage;
 
 #[cfg(test)]
@@ -221,5 +223,51 @@ mod tests {
         assert!(matches!(invalid, StorageError::InvalidIdentifier { .. }));
         assert!(matches!(error, StorageError::DecryptionFailed));
         let _ = fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn pending_outbound_queue_persists_and_restores_across_open() {
+        use crate::StoredPendingOutbound;
+
+        let mut rng = OsRng;
+        let storage = SqliteStorage::open("sqlite::memory:", StorageKey::generate(&mut rng))
+            .await
+            .expect("storage should open");
+
+        let entry = StoredPendingOutbound::new(
+            "bob-phone",
+            0,
+            "msg-pending-1",
+            "chat-main",
+            1_711_111_200_000,
+            StoredMessageKind::Text,
+            b"encrypted-body-bytes".to_vec(),
+            1,
+        )
+        .expect("pending entry should validate");
+
+        storage
+            .upsert_pending_outbound(&entry)
+            .await
+            .expect("pending entry should persist");
+
+        let loaded = storage
+            .pending_outbound_for_peer("bob-phone")
+            .await
+            .expect("pending entries should load");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].message_id, "msg-pending-1");
+        assert_eq!(loaded[0].delivery_order, 0);
+        assert_eq!(loaded[0].body, b"encrypted-body-bytes");
+
+        storage
+            .remove_pending_outbound("bob-phone", "msg-pending-1")
+            .await
+            .expect("remove should succeed");
+        let after_remove = storage
+            .pending_outbound_for_peer("bob-phone")
+            .await
+            .expect("load after remove should succeed");
+        assert!(after_remove.is_empty(), "queue must be empty after removal");
     }
 }

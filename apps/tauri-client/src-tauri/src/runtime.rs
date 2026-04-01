@@ -135,6 +135,10 @@ impl DirectChatRuntime {
         })
     }
 
+    pub fn engine_snapshot(&self) -> localmessenger_messaging::PendingQueueSnapshot {
+        self.local_engine.export_pending_queue()
+    }
+
     fn next_reply_body(&mut self) -> Option<String> {
         if self.reply_script.is_empty() {
             return None;

@@ -9,7 +9,9 @@ mod handshake;
 mod session;
 
 pub use channel::{FrameChannel, InMemoryFrameChannel};
-pub use engine::{DeliveredMessage, MessagingEngine, OutgoingMessage, ReceiveOutcome};
+pub use engine::{
+    DeliveredMessage, MessagingEngine, OutgoingMessage, PendingQueueSnapshot, ReceiveOutcome,
+};
 pub use envelope::MessageKind;
 pub use error::MessagingError;
 pub use group::{

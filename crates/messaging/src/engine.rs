@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use localmessenger_core::{Device, DeviceId, MemberId};
+use serde::{Deserialize, Serialize};
 
 use crate::envelope::{
     MESSAGING_ENVELOPE_VERSION, MessageKind, MessagingEnvelope, MessagingEnvelopeBody, WireAck,
@@ -11,7 +12,7 @@ use crate::{MessagingError, SecureSession};
 const MAX_INCOMING_ORDER_GAP: u64 = 1024;
 const MAX_TRACKED_INCOMING_ORDERS: u64 = 4096;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutgoingMessage {
     message_id: String,
     conversation_id: String,
@@ -130,6 +131,19 @@ pub struct MessagingEngine {
     incoming_message_orders: BTreeMap<String, u64>,
     incoming_order_index: BTreeMap<u64, String>,
     buffered_incoming: BTreeMap<u64, WireMessage>,
+}
+
+/// A portable snapshot of the pending outbound queue that can be serialised to
+/// SQLite and restored on the next startup so unacknowledged messages survive
+/// application restarts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingQueueSnapshot {
+    /// The next `delivery_order` counter that will be assigned to a freshly
+    /// queued message.  Must be restored so the ordering stays contiguous.
+    pub next_outgoing_order: u64,
+    /// All messages that have been sent but not yet acknowledged at the time
+    /// the snapshot was taken.
+    pub pending_messages: Vec<OutgoingMessage>,
 }
 
 impl MessagingEngine {
@@ -445,6 +459,43 @@ impl MessagingEngine {
             self.incoming_order_index.remove(&oldest_order);
             self.incoming_message_orders.remove(&oldest_message_id);
         }
+    }
+
+    /// Exports the current in-memory pending queue as a portable snapshot that
+    /// can be persisted to SQLite and later fed back to
+    /// [`MessagingEngine::restore_pending_queue`].
+    pub fn export_pending_queue(&self) -> PendingQueueSnapshot {
+        PendingQueueSnapshot {
+            next_outgoing_order: self.next_outgoing_order,
+            pending_messages: self.pending_by_order.values().cloned().collect(),
+        }
+    }
+
+    /// Restores a previously exported snapshot into a freshly constructed
+    /// engine.  Fails if the snapshot contains message IDs that are already
+    /// tracked or if identifiers are invalid.
+    pub fn restore_pending_queue(
+        &mut self,
+        snapshot: PendingQueueSnapshot,
+    ) -> Result<(), MessagingError> {
+        for message in snapshot.pending_messages {
+            validate_identifier("message_id", &message.message_id)?;
+            validate_identifier("conversation_id", &message.conversation_id)?;
+            if !self.outgoing_message_ids.insert(message.message_id.clone()) {
+                return Err(MessagingError::DuplicateOutgoingMessageId(
+                    message.message_id.clone(),
+                ));
+            }
+            self.pending_index
+                .insert(message.message_id.clone(), message.delivery_order);
+            self.pending_by_order
+                .insert(message.delivery_order, message);
+        }
+        // Advance the order counter so new messages don't collide.
+        if snapshot.next_outgoing_order > self.next_outgoing_order {
+            self.next_outgoing_order = snapshot.next_outgoing_order;
+        }
+        Ok(())
     }
 
     fn ensure_session_matches(&self, session: &SecureSession) -> Result<(), MessagingError> {

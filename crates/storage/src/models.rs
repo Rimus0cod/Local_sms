@@ -124,6 +124,51 @@ impl StoredMessage {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredPendingOutbound {
+    pub peer_device_id: String,
+    pub delivery_order: u64,
+    pub message_id: String,
+    pub conversation_id: String,
+    pub sent_at_unix_ms: i64,
+    pub kind: StoredMessageKind,
+    pub body: Vec<u8>,
+    pub attempt_count: u32,
+}
+
+impl StoredPendingOutbound {
+    pub fn new(
+        peer_device_id: impl Into<String>,
+        delivery_order: u64,
+        message_id: impl Into<String>,
+        conversation_id: impl Into<String>,
+        sent_at_unix_ms: i64,
+        kind: StoredMessageKind,
+        body: Vec<u8>,
+        attempt_count: u32,
+    ) -> Result<Self, StorageError> {
+        let peer_device_id = peer_device_id.into();
+        let message_id = message_id.into();
+        let conversation_id = conversation_id.into();
+        validate_identifier("peer_device_id", &peer_device_id)?;
+        validate_identifier("message_id", &message_id)?;
+        validate_identifier("conversation_id", &conversation_id)?;
+        if body.is_empty() {
+            return Err(StorageError::EmptyCiphertext);
+        }
+        Ok(Self {
+            peer_device_id,
+            delivery_order,
+            message_id,
+            conversation_id,
+            sent_at_unix_ms,
+            kind,
+            body,
+            attempt_count,
+        })
+    }
+}
+
 pub(crate) fn validate_identifier(field: &'static str, value: &str) -> Result<(), StorageError> {
     if value.trim().is_empty() {
         return Err(StorageError::InvalidIdentifier {

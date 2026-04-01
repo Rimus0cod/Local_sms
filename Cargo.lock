@@ -2628,6 +2628,7 @@ dependencies = [
  "localmessenger_discovery",
  "localmessenger_messaging",
  "localmessenger_server_protocol",
+ "localmessenger_storage",
  "localmessenger_transport",
  "rand_core 0.6.4",
  "serde",

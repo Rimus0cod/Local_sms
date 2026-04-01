@@ -16,6 +16,7 @@ localmessenger_core = { path = "../../../crates/core" }
 localmessenger_crypto = { path = "../../../crates/crypto" }
 localmessenger_discovery = { path = "../../../crates/discovery" }
 localmessenger_messaging = { path = "../../../crates/messaging" }
+localmessenger_storage = { path = "../../../crates/storage" }
 localmessenger_server_protocol = { path = "../../../crates/server_protocol" }
 localmessenger_transport = { path = "../../../crates/transport" }
 rand_core.workspace = true

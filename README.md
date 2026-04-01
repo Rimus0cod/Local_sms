@@ -2,23 +2,106 @@
 
 Secure local-first messenger for a small trusted group.
 
-This repository now follows the target monorepo layout and has working implementations for:
+## Installation
 
-- `STEP 1 — Crypto Layer` in `crates/crypto`
-- `STEP 2 — Device Model` in `crates/core`
-- `STEP 3 — Discovery Layer` in `crates/discovery`
-- `STEP 4 — Transport Layer` in `crates/transport`
-- `STEP 5 — Secure Session Integration` in `crates/messaging`
-- `STEP 6 — Storage Layer` in `crates/storage`
-- `STEP 7 — Messaging Engine` in `crates/messaging`
-- `STEP 8 — Group Messaging` in `crates/messaging`
-- `STEP 9 — Tauri Client` in `apps/tauri-client`
-- `STEP 10 — Security Hardening` across `crates/crypto`, `crates/messaging`, and `docs/`
-- `SPRINT 1 — QUIC Relay Server with LAN Fallback` across `apps/localmessenger_server`, `crates/server_protocol`, `crates/messaging`, and `apps/tauri-client`
-- `SPRINT 2 — Offline Queue + Signed Invites + Client Onboarding` across `apps/localmessenger_server`, `crates/server_protocol`, and `apps/tauri-client`
-- `SPRINT 3 — Media Files` across `apps/localmessenger_server`, `crates/server_protocol`, and `apps/tauri-client`
-- `SPRINT 4 — Statuses + Notifications + Voice` in `apps/tauri-client`
-- `SPRINT 5 — UI Polish + Hardening` across `apps/localmessenger_server` and `apps/tauri-client`
+Pre-built installers are published with every tagged release on GitHub:  
+**<https://github.com/Rimus0cod/Local_sms/releases/latest>**
+
+### Windows
+
+1. Download `LocalMessenger_x.x.x_x64-setup.exe` (NSIS installer) **or** `LocalMessenger_x.x.x_x64_en-US.msi` (MSI package).
+2. Run the installer and follow the on-screen prompts.
+3. Launch **Local Messenger** from the Start Menu or Desktop shortcut.
+
+### macOS
+
+1. Download `LocalMessenger_x.x.x_x64.dmg` (or `_aarch64.dmg` for Apple Silicon).
+2. Open the `.dmg` file and drag **Local Messenger** into your **Applications** folder.
+3. On first launch macOS may show a Gatekeeper warning — open **System Settings → Privacy & Security** and click **Open Anyway**.
+
+### Linux
+
+**AppImage** (works on most distributions, no installation required):
+
+```bash
+chmod +x LocalMessenger_x.x.x_amd64.AppImage
+./LocalMessenger_x.x.x_amd64.AppImage
+```
+
+**Debian / Ubuntu package:**
+
+```bash
+sudo dpkg -i localmessenger_x.x.x_amd64.deb
+```
+
+---
+
+## Quick Start
+
+1. **Launch the app** — the main window opens with an empty contact list.
+2. **First launch** — the app automatically generates your device identity (Ed25519 key pair). No account or server registration is required.
+3. **Invite someone:**
+   - Go to **Settings → Create Invite Link**.
+   - Copy the generated link and send it to the other person via any channel (email, Signal, etc.).
+4. **Join with an invite link (recipient side):**
+   - Open the app, choose **File → Join with Invite Link**, and paste the link you received.
+   - The app will complete the cryptographic handshake and add the contact automatically.
+5. **Verify your contact** — to confirm you are not talking to an impersonator, compare the **Safety Number** or scan the **QR code** under **Settings → Verification**.  Both sides must see identical values.
+6. **Start chatting!** — select the contact from the list and send your first message.
+
+---
+
+## Self-hosted Relay (optional)
+
+Without a relay the app communicates **peer-to-peer over LAN only** (same Wi-Fi or local network segment).  If you and your contacts are on different networks and need to reach each other over the internet you can run the bundled QUIC relay server.
+
+See **[docs/server-relay.md](docs/server-relay.md)** for full setup instructions, environment variables, and example systemd / Docker configurations.
+
+---
+
+## Build from Source
+
+### Prerequisites
+
+| Tool | Minimum version |
+|------|----------------|
+| [Rust](https://rustup.rs/) | 1.77 |
+| [Node.js](https://nodejs.org/) | 20 |
+| Cargo `tauri-cli` | bundled via npm scripts |
+
+**Linux** — install system libraries first:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  libwebkit2gtk-4.1-dev build-essential curl wget file \
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+**macOS** — Xcode Command Line Tools are sufficient (`xcode-select --install`).
+
+**Windows** — install the [Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+
+### Production build
+
+```bash
+git clone https://github.com/Rimus0cod/Local_sms
+cd Local_sms
+npm install --prefix apps/tauri-client
+cargo tauri build --manifest-path apps/tauri-client/src-tauri/Cargo.toml
+```
+
+Finished installers are placed in `apps/tauri-client/src-tauri/target/release/bundle/`.
+
+### Development mode
+
+```bash
+npm run tauri:dev --prefix apps/tauri-client
+```
+
+This starts the Vite dev server and the Tauri shell with hot-reload for the frontend.
+
+---
 
 ## Monorepo layout
 
@@ -37,6 +120,24 @@ This repository now follows the target monorepo layout and has working implement
 ```
 
 ## Current status
+
+- `STEP 1 — Crypto Layer` in `crates/crypto`
+- `STEP 2 — Device Model` in `crates/core`
+- `STEP 3 — Discovery Layer` in `crates/discovery`
+- `STEP 4 — Transport Layer` in `crates/transport`
+- `STEP 5 — Secure Session Integration` in `crates/messaging`
+- `STEP 6 — Storage Layer` in `crates/storage`
+- `STEP 7 — Messaging Engine` in `crates/messaging`
+- `STEP 8 — Group Messaging` in `crates/messaging`
+- `STEP 9 — Tauri Client` in `apps/tauri-client`
+- `STEP 10 — Security Hardening` across `crates/crypto`, `crates/messaging`, and `docs/`
+- `SPRINT 1 — QUIC Relay Server with LAN Fallback` across `apps/localmessenger_server`, `crates/server_protocol`, `crates/messaging`, and `apps/tauri-client`
+- `SPRINT 2 — Offline Queue + Signed Invites + Client Onboarding` across `apps/localmessenger_server`, `crates/server_protocol`, and `apps/tauri-client`
+- `SPRINT 3 — Media Files` across `apps/localmessenger_server`, `crates/server_protocol`, and `apps/tauri-client`
+- `SPRINT 4 — Statuses + Notifications + Voice` in `apps/tauri-client`
+- `SPRINT 5 — UI Polish + Hardening` across `apps/localmessenger_server` and `apps/tauri-client`
+
+## Detailed crate and app status
 
 - `crates/crypto` contains the security foundation for device-to-device encrypted sessions.
 - `crates/core` contains member/device domain models, multi-device support, safety numbers, and QR-based verification payloads.
@@ -166,4 +267,4 @@ npm install --prefix apps/tauri-client
 npm run build --prefix apps/tauri-client
 ```
 
-Relay setup details and environment examples live in [docs/server-relay.md](/home/diff/Local_sms/docs/server-relay.md).
+Relay setup details and environment examples live in [docs/server-relay.md](docs/server-relay.md).
