@@ -64,6 +64,7 @@ export interface MessageAttachmentView {
   statusLabel: string;
   previewDataUrl: string | null;
   blobId: string | null;
+  uploadProgress: number;
 }
 
 export interface MessageView {

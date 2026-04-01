@@ -28,6 +28,7 @@ type ClientStore = {
   theme: ThemeMode;
   busy: boolean;
   error: string | null;
+  uploadProgress: Record<string, number>;
   load: () => Promise<void>;
   selectChat: (chatId: string) => void;
   selectVerificationDevice: (deviceId: string) => void;
@@ -58,12 +59,12 @@ function synchronizeSelection(
 ) {
   const nextChatId = snapshot.chats.some((chat) => chat.id === selectedChatId)
     ? selectedChatId
-    : snapshot.chats[0]?.id ?? null;
+    : (snapshot.chats[0]?.id ?? null);
   const nextVerificationDeviceId = snapshot.verification.devices.some(
     (device) => device.deviceId === selectedVerificationDeviceId,
   )
     ? selectedVerificationDeviceId
-    : snapshot.verification.devices[0]?.deviceId ?? null;
+    : (snapshot.verification.devices[0]?.deviceId ?? null);
 
   return {
     nextChatId,
@@ -79,6 +80,7 @@ export const useClientStore = create<ClientStore>((set, get) => ({
   theme: "midnight",
   busy: false,
   error: null,
+  uploadProgress: {},
   load: async () => {
     set({ busy: true, error: null });
 
@@ -102,6 +104,29 @@ export const useClientStore = create<ClientStore>((set, get) => ({
         error: error instanceof Error ? error.message : "Unknown client error",
       });
     }
+
+    // Subscribe to upload-progress events emitted by the Rust backend.
+    // Only runs inside the Tauri shell; the browser fallback skips this safely.
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => {
+          listen<{ chatId: string; progress: number; statusLabel: string }>(
+            "upload-progress",
+            (event) => {
+              const { chatId, progress } = event.payload;
+              set((state) => ({
+                uploadProgress: {
+                  ...state.uploadProgress,
+                  [chatId]: progress,
+                },
+              }));
+            },
+          ).catch(() => {
+            /* silently ignore if event system is unavailable */
+          });
+        })
+        .catch(() => {});
+    }
   },
   selectChat: (chatId) => {
     set((state) => {
@@ -112,7 +137,10 @@ export const useClientStore = create<ClientStore>((set, get) => ({
       const chats = state.snapshot.chats.map((chat) =>
         chat.id === chatId ? { ...chat, unreadCount: 0 } : chat,
       );
-      const unreadCount = chats.reduce((sum, chat) => sum + chat.unreadCount, 0);
+      const unreadCount = chats.reduce(
+        (sum, chat) => sum + chat.unreadCount,
+        0,
+      );
 
       return {
         selectedChatId: chatId,
@@ -122,7 +150,8 @@ export const useClientStore = create<ClientStore>((set, get) => ({
           notifications: {
             ...state.snapshot.notifications,
             unreadCount,
-            trayLabel: unreadCount === 0 ? "Tray idle" : `${unreadCount} unread`,
+            trayLabel:
+              unreadCount === 0 ? "Tray idle" : `${unreadCount} unread`,
           },
         },
       };
@@ -184,7 +213,12 @@ export const useClientStore = create<ClientStore>((set, get) => ({
       });
     }
   },
-  sendMedia: async (fileName, mimeType, bytesBase64, replyToMessageId = null) => {
+  sendMedia: async (
+    fileName,
+    mimeType,
+    bytesBase64,
+    replyToMessageId = null,
+  ) => {
     const state = get();
     if (!state.selectedChatId) {
       return;
@@ -206,11 +240,18 @@ export const useClientStore = create<ClientStore>((set, get) => ({
         state.selectedVerificationDeviceId,
       );
 
-      set({
-        snapshot,
-        selectedChatId: nextChatId,
-        selectedVerificationDeviceId: nextVerificationDeviceId,
-        busy: false,
+      // Clear upload progress for this chat once the command has returned.
+      const chatIdToClear = state.selectedChatId ?? "";
+      set((prev) => {
+        const { [chatIdToClear]: _removed, ...remainingProgress } =
+          prev.uploadProgress;
+        return {
+          snapshot,
+          selectedChatId: nextChatId,
+          selectedVerificationDeviceId: nextVerificationDeviceId,
+          busy: false,
+          uploadProgress: remainingProgress,
+        };
       });
     } catch (error) {
       set({
@@ -281,7 +322,8 @@ export const useClientStore = create<ClientStore>((set, get) => ({
     } catch (error) {
       set({
         busy: false,
-        error: error instanceof Error ? error.message : "Reaction update failed",
+        error:
+          error instanceof Error ? error.message : "Reaction update failed",
       });
     }
   },
@@ -394,7 +436,8 @@ export const useClientStore = create<ClientStore>((set, get) => ({
     } catch (error) {
       set({
         busy: false,
-        error: error instanceof Error ? error.message : "Invite acceptance failed",
+        error:
+          error instanceof Error ? error.message : "Invite acceptance failed",
       });
     }
   },

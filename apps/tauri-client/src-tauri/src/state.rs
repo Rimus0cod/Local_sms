@@ -207,6 +207,7 @@ pub struct MessageAttachmentView {
     pub status_label: String,
     pub preview_data_url: Option<String>,
     pub blob_id: Option<String>,
+    pub upload_progress: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1121,10 +1122,6 @@ impl ClientState {
             .iter()
             .find(|chat| chat.id == chat_id)
             .ok_or_else(|| format!("chat '{chat_id}' not found"))?;
-        if matches!(chat.kind, ChatKindView::Group) {
-            return Err("group media transfer is still staged in the desktop client".to_string());
-        }
-
         let route = if plaintext.len() <= RELAY_MEDIA_MAX_BYTES && self.relay_client.is_some() {
             MediaRoute::RelayBlobStore
         } else {
@@ -1205,6 +1202,7 @@ impl ClientState {
                 None
             },
             blob_id,
+            upload_progress: 1.0,
         };
 
         let chat = self
@@ -1723,6 +1721,7 @@ fn sample_photo_attachment() -> MessageAttachmentView {
         status_label: "encrypted relay blob cached".to_string(),
         preview_data_url: Some(sample_photo_preview_data_url()),
         blob_id: Some("blob-sample-photo".to_string()),
+        upload_progress: 1.0,
     }
 }
 
@@ -1736,6 +1735,7 @@ fn sample_voice_attachment() -> MessageAttachmentView {
         status_label: "voice note synced".to_string(),
         preview_data_url: Some(sample_voice_data_url()),
         blob_id: Some("blob-sample-voice".to_string()),
+        upload_progress: 1.0,
     }
 }
 
@@ -1749,6 +1749,7 @@ fn sample_pdf_attachment() -> MessageAttachmentView {
         status_label: "document preview ready".to_string(),
         preview_data_url: Some(sample_pdf_data_url()),
         blob_id: Some("blob-sample-pdf".to_string()),
+        upload_progress: 1.0,
     }
 }
 

@@ -1,4 +1,4 @@
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::state::{ClientSnapshot, SharedClientState, VerificationAction};
 use crate::tray::sync_tray;
@@ -50,6 +50,14 @@ pub async fn send_media(
     bytes_base64: String,
     reply_to_message_id: Option<String>,
 ) -> Result<ClientSnapshot, String> {
+    let _ = app.emit(
+        "upload-progress",
+        serde_json::json!({
+            "chatId": &chat_id,
+            "progress": 0.1_f32,
+            "statusLabel": "Encrypting…"
+        }),
+    );
     let mut guard = state.lock().await;
     guard
         .send_media(
@@ -60,6 +68,14 @@ pub async fn send_media(
             reply_to_message_id.as_deref(),
         )
         .await?;
+    let _ = app.emit(
+        "upload-progress",
+        serde_json::json!({
+            "chatId": &chat_id,
+            "progress": 1.0_f32,
+            "statusLabel": "Done"
+        }),
+    );
     let snapshot = guard.snapshot();
     sync_tray(&app, &snapshot);
     Ok(snapshot)

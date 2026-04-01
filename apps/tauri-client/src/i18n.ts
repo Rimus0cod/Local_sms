@@ -89,6 +89,14 @@ export type CopyBundle = {
   inviteEmptySubtitle: string;
   inviteSent: string;
   inviteClose: string;
+  uploadingLabel: string;
+  uploadCompleteLabel: string;
+  uploadingProgress: string;
+  mediaViaRelay: string;
+  mediaViaDirect: string;
+  scrollToBottom: string;
+  groupLabel: string;
+  noRelayForGroup: string;
   peerStates: Record<PeerState, string>;
   verificationStates: Record<VerificationState, string>;
   verificationMethods: Record<VerificationMethod, string>;
@@ -144,7 +152,8 @@ export const COPY: Record<LocaleCode, CopyBundle> = {
     safetyNumber: "Safety number",
     verifiedVia: "Verified via",
     noChatSelected: "Select a chat to start messaging",
-    noVerificationDevice: "Select a device to inspect its verification material.",
+    noVerificationDevice:
+      "Select a device to inspect its verification material.",
     searchPlaceholder: "Search",
     youLabel: "You",
     settingsTitle: "Settings",
@@ -180,6 +189,14 @@ export const COPY: Record<LocaleCode, CopyBundle> = {
     inviteEmptySubtitle: "Invite someone to start chatting",
     inviteSent: "Link copied to clipboard",
     inviteClose: "Close",
+    uploadingLabel: "Uploading…",
+    uploadCompleteLabel: "Uploaded",
+    uploadingProgress: "Uploading {n}%",
+    mediaViaRelay: "via relay",
+    mediaViaDirect: "P2P direct",
+    scrollToBottom: "Jump to latest",
+    groupLabel: "Group",
+    noRelayForGroup: "Group media requires a relay server",
     peerStates: {
       live: "Reachable",
       reconnecting: "Reconnecting",
@@ -276,7 +293,8 @@ export const COPY: Record<LocaleCode, CopyBundle> = {
     settingsLastCheck: "Последняя проверка",
     inviteFriend: "Пригласить",
     inviteTitle: "Пригласить друга",
-    inviteSubtitle: "Поделитесь ссылкой, чтобы кто-то присоединился к вашей группе",
+    inviteSubtitle:
+      "Поделитесь ссылкой, чтобы кто-то присоединился к вашей группе",
     inviteLinkLabel: "Ссылка-приглашение",
     inviteCopyLink: "Копировать ссылку",
     inviteCopied: "Скопировано!",
@@ -289,6 +307,14 @@ export const COPY: Record<LocaleCode, CopyBundle> = {
     inviteEmptySubtitle: "Пригласите кого-нибудь, чтобы начать общение",
     inviteSent: "Ссылка скопирована",
     inviteClose: "Закрыть",
+    uploadingLabel: "Загрузка…",
+    uploadCompleteLabel: "Загружено",
+    uploadingProgress: "Загрузка {n}%",
+    mediaViaRelay: "через сервер",
+    mediaViaDirect: "P2P напрямую",
+    scrollToBottom: "К последнему",
+    groupLabel: "Группа",
+    noRelayForGroup: "Медиа-файлы группы требуют сервер-ретранслятор",
     peerStates: {
       live: "Доступен",
       reconnecting: "Переподключение",

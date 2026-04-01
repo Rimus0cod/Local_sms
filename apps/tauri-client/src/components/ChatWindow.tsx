@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import type { CopyBundle } from "../i18n";
 import type { ChatThreadView, ThemeMode } from "../types";
@@ -24,6 +24,8 @@ type ChatWindowProps = {
   onReply: (messageId: string) => void;
   onForward: (messageId: string) => void;
   onToggleReaction: (messageId: string, reaction: string) => void;
+  /** Upload progress for the current chat (0–1). Undefined when no upload is in flight. */
+  uploadProgress?: number;
 };
 
 function getAvatarColor(title: string): number {
@@ -38,13 +40,14 @@ function deliveryIcon(
   state: ChatThreadView["messages"][number]["deliveryState"],
 ): string {
   switch (state) {
+    case "queued":
+      return "🕐";
     case "sent":
       return "✓";
     case "delivered":
       return "✓✓";
     case "seen":
       return "✓✓";
-    case "queued":
     default:
       return "…";
   }
@@ -67,9 +70,19 @@ export function ChatWindow({
   onReply,
   onForward,
   onToggleReaction,
+  uploadProgress,
 }: ChatWindowProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const prevMessageCount = useRef(0);
+
+  useEffect(() => {
+    const currentCount = chat?.messages.length ?? 0;
+    if (currentCount > prevMessageCount.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+    prevMessageCount.current = currentCount;
+  }, [chat?.messages.length]);
 
   if (!chat) {
     return (
@@ -99,9 +112,7 @@ export function ChatWindow({
           </span>
           <div className="chat-header-info">
             <div className="chat-header-name">{chat.title}</div>
-            <div
-              className={`chat-header-status${isOnline ? "" : " offline"}`}
-            >
+            <div className={`chat-header-status${isOnline ? "" : " offline"}`}>
               {chat.presenceLabel}
             </div>
           </div>
@@ -202,7 +213,13 @@ export function ChatWindow({
                         </span>
                         {isOutbound ? (
                           <span
-                            className={`message-delivery${message.deliveryState === "queued" ? " pending" : ""}`}
+                            className={`message-delivery${
+                              message.deliveryState === "queued"
+                                ? " pending"
+                                : message.deliveryState === "seen"
+                                  ? " seen"
+                                  : ""
+                            }`}
                           >
                             {deliveryIcon(message.deliveryState)}
                           </span>
@@ -212,7 +229,29 @@ export function ChatWindow({
 
                     {message.attachments.map((attachment) => (
                       <div className="message-attachment" key={attachment.id}>
-                        {attachment.previewDataUrl ? (
+                        {attachment.uploadProgress < 1.0 ? (
+                          <div className="attachment-upload-progress">
+                            <div className="attachment-upload-meta">
+                              <span className="attachment-file-icon">📎</span>
+                              <span className="attachment-upload-name">
+                                {attachment.fileName}
+                              </span>
+                            </div>
+                            <div className="attachment-upload-track">
+                              <div
+                                className="attachment-upload-bar"
+                                style={{
+                                  width: `${Math.round(attachment.uploadProgress * 100)}%`,
+                                }}
+                              />
+                            </div>
+                            <span className="attachment-upload-label">
+                              {Math.round(attachment.uploadProgress * 100)}%
+                              &nbsp;·&nbsp;
+                              {attachment.sizeLabel}
+                            </span>
+                          </div>
+                        ) : attachment.previewDataUrl ? (
                           attachment.mimeType.startsWith("image/") ? (
                             <img
                               alt={attachment.fileName}
@@ -296,12 +335,8 @@ export function ChatWindow({
         {pendingReply ? (
           <div className="composer-reply-bar">
             <div className="composer-reply-content">
-              <div className="composer-reply-author">
-                {pendingReply.author}
-              </div>
-              <div className="composer-reply-text">
-                {pendingReply.preview}
-              </div>
+              <div className="composer-reply-author">{pendingReply.author}</div>
+              <div className="composer-reply-text">{pendingReply.preview}</div>
             </div>
             <button
               className="composer-reply-close"
@@ -314,6 +349,15 @@ export function ChatWindow({
         ) : null}
 
         <div className="composer-inner">
+          {uploadProgress !== undefined && uploadProgress < 1.0 ? (
+            <div className="composer-upload-indicator">
+              <div
+                className="composer-upload-bar"
+                style={{ width: `${Math.round(uploadProgress * 100)}%` }}
+              />
+            </div>
+          ) : null}
+
           <button
             className="composer-btn"
             onClick={() => fileInputRef.current?.click()}
@@ -340,11 +384,7 @@ export function ChatWindow({
             />
           </div>
 
-          <button
-            className="composer-btn"
-            type="button"
-            title="Emoji"
-          >
+          <button className="composer-btn" type="button" title="Emoji">
             😊
           </button>
 
@@ -362,12 +402,10 @@ export function ChatWindow({
               className={`composer-send-btn${isRecordingVoice ? "" : ""}`}
               onClick={onToggleVoiceRecording}
               type="button"
-              title={isRecordingVoice ? copy.stopVoiceRecording : copy.recordVoice}
-              style={
-                isRecordingVoice
-                  ? { color: "#e17076" }
-                  : undefined
+              title={
+                isRecordingVoice ? copy.stopVoiceRecording : copy.recordVoice
               }
+              style={isRecordingVoice ? { color: "#e17076" } : undefined}
             >
               🎤
             </button>

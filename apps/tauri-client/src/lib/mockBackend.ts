@@ -62,7 +62,8 @@ function createInitialSnapshot(): ClientSnapshot {
             direction: "outbound",
             deliveryState: "seen",
             forwardedFrom: null,
-            replyPreview: "I am back on the office Wi-Fi. QUIC path is stable now.",
+            replyPreview:
+              "I am back on the office Wi-Fi. QUIC path is stable now.",
             reactions: [],
             attachments: [],
           },
@@ -148,6 +149,7 @@ function createInitialSnapshot(): ClientSnapshot {
                 statusLabel: "encrypted relay blob cached",
                 previewDataUrl: samplePhotoDataUrl(),
                 blobId: "blob-mock-photo-1",
+                uploadProgress: 1.0,
               },
               {
                 id: "mock-voice-1",
@@ -158,6 +160,7 @@ function createInitialSnapshot(): ClientSnapshot {
                 statusLabel: "voice note ready",
                 previewDataUrl: sampleVoiceDataUrl(),
                 blobId: "blob-mock-voice-1",
+                uploadProgress: 1.0,
               },
               {
                 id: "mock-pdf-1",
@@ -168,6 +171,7 @@ function createInitialSnapshot(): ClientSnapshot {
                 statusLabel: "document preview ready",
                 previewDataUrl: samplePdfDataUrl(),
                 blobId: "blob-mock-pdf-1",
+                uploadProgress: 1.0,
               },
             ],
           },
@@ -302,7 +306,8 @@ export async function refreshPeers(): Promise<ClientSnapshot> {
       return {
         ...peer,
         state: refreshCounter % 2 === 0 ? "live" : "reconnecting",
-        lastSeenLabel: refreshCounter % 2 === 0 ? "seen just now" : "seen 18s ago",
+        lastSeenLabel:
+          refreshCounter % 2 === 0 ? "seen just now" : "seen 18s ago",
       };
     }
 
@@ -330,7 +335,8 @@ export async function sendMessage(
 
   messageCounter += 1;
   const replyPreview = replyToMessageId
-    ? chat.messages.find((message) => message.id === replyToMessageId)?.body ?? null
+    ? (chat.messages.find((message) => message.id === replyToMessageId)?.body ??
+      null)
     : null;
   const message = {
     id: `local-${messageCounter}`,
@@ -368,14 +374,19 @@ export async function sendMedia(
   replyToMessageId: string | null = null,
 ): Promise<ClientSnapshot> {
   const chat = snapshot.chats.find((entry) => entry.id === chatId);
-  if (!chat || fileName.trim().length === 0 || bytesBase64.trim().length === 0) {
+  if (
+    !chat ||
+    fileName.trim().length === 0 ||
+    bytesBase64.trim().length === 0
+  ) {
     return cloneSnapshot();
   }
 
   const byteLength = Math.floor((bytesBase64.length * 3) / 4);
   const direct = byteLength > 5 * 1024 * 1024;
   const replyPreview = replyToMessageId
-    ? chat.messages.find((message) => message.id === replyToMessageId)?.body ?? null
+    ? (chat.messages.find((message) => message.id === replyToMessageId)?.body ??
+      null)
     : null;
   messageCounter += 1;
   chat.messages.push({
@@ -398,14 +409,16 @@ export async function sendMedia(
             ? `${(byteLength / (1024 * 1024)).toFixed(1)} MB`
             : `${Math.max(1, Math.round(byteLength / 1024))} KB`,
         transferRoute: direct ? "p2p_quic_direct" : "server_blob_store",
+        uploadProgress: 1.0,
         statusLabel: direct
           ? "direct QUIC handoff complete · mock-direct"
           : "encrypted relay blob ready · mock-blob",
-        previewDataUrl: mimeType.startsWith("image/")
-          || mimeType.startsWith("audio/")
-          || mimeType === "application/pdf"
-          ? `data:${mimeType};base64,${bytesBase64}`
-          : null,
+        previewDataUrl:
+          mimeType.startsWith("image/") ||
+          mimeType.startsWith("audio/") ||
+          mimeType === "application/pdf"
+            ? `data:${mimeType};base64,${bytesBase64}`
+            : null,
         blobId: direct ? null : "mock-blob",
       },
     ],
@@ -428,24 +441,28 @@ export async function verifyDevice(
   deviceId: string,
   action: VerificationAction,
 ): Promise<ClientSnapshot> {
-  snapshot.verification.devices = snapshot.verification.devices.map((device) => {
-    if (device.deviceId !== deviceId) {
-      return device;
-    }
+  snapshot.verification.devices = snapshot.verification.devices.map(
+    (device) => {
+      if (device.deviceId !== deviceId) {
+        return device;
+      }
 
-    return {
-      ...device,
-      state: "verified",
-      method: action === "qr" ? "qr_code" : "safety_number",
-    };
-  });
+      return {
+        ...device,
+        state: "verified",
+        method: action === "qr" ? "qr_code" : "safety_number",
+      };
+    },
+  );
 
-  snapshot.verification.trustedDeviceCount = snapshot.verification.devices.filter(
-    (device) => device.state === "verified",
-  ).length;
-  snapshot.verification.pendingDeviceCount = snapshot.verification.devices.filter(
-    (device) => device.state === "pending",
-  ).length;
+  snapshot.verification.trustedDeviceCount =
+    snapshot.verification.devices.filter(
+      (device) => device.state === "verified",
+    ).length;
+  snapshot.verification.pendingDeviceCount =
+    snapshot.verification.devices.filter(
+      (device) => device.state === "pending",
+    ).length;
 
   snapshot.peers = snapshot.peers.map((peer) =>
     peer.deviceId === deviceId
@@ -468,7 +485,9 @@ export async function verifyDevice(
   return cloneSnapshot();
 }
 
-export async function previewInvite(inviteLink: string): Promise<ClientSnapshot> {
+export async function previewInvite(
+  inviteLink: string,
+): Promise<ClientSnapshot> {
   snapshot.onboarding = {
     statusLabel: "Invite preview is ready.",
     invitePreview: {
@@ -492,7 +511,9 @@ export async function previewInvite(inviteLink: string): Promise<ClientSnapshot>
   return cloneSnapshot();
 }
 
-export async function acceptInvite(inviteLink: string): Promise<ClientSnapshot> {
+export async function acceptInvite(
+  inviteLink: string,
+): Promise<ClientSnapshot> {
   await previewInvite(inviteLink);
   snapshot.transportStatus.serverStatus = "connected";
   snapshot.transportStatus.authStatus = "authenticated";
@@ -500,7 +521,8 @@ export async function acceptInvite(inviteLink: string): Promise<ClientSnapshot> 
   snapshot.serverStatus = "connected";
   snapshot.authStatus = "authenticated";
   snapshot.activeRoute = "server_relay";
-  snapshot.onboarding.statusLabel = "Joined relay 203.0.113.10:7443 as rimus-laptop.";
+  snapshot.onboarding.statusLabel =
+    "Joined relay 203.0.113.10:7443 as rimus-laptop.";
   snapshot.notifications = {
     trayLabel: `${totalUnread()} unread`,
     unreadCount: totalUnread(),
@@ -543,7 +565,9 @@ export async function forwardMessage(
 ): Promise<ClientSnapshot> {
   const sourceChat = snapshot.chats.find((entry) => entry.id === sourceChatId);
   const targetChat = snapshot.chats.find((entry) => entry.id === targetChatId);
-  const sourceMessage = sourceChat?.messages.find((entry) => entry.id === messageId);
+  const sourceMessage = sourceChat?.messages.find(
+    (entry) => entry.id === messageId,
+  );
   if (!sourceChat || !targetChat || !sourceMessage) {
     return cloneSnapshot();
   }
@@ -595,9 +619,9 @@ function samplePhotoDataUrl(): string {
 
 function sampleVoiceDataUrl(): string {
   const wavBytes = new Uint8Array([
-    82, 73, 70, 70, 44, 0, 0, 0, 87, 65, 86, 69, 102, 109, 116, 32, 16, 0,
-    0, 0, 1, 0, 1, 0, 64, 31, 0, 0, 128, 62, 0, 0, 2, 0, 16, 0, 100, 97, 116,
-    97, 8, 0, 0, 0, 0, 0, 20, 10, 20, 10, 0, 0,
+    82, 73, 70, 70, 44, 0, 0, 0, 87, 65, 86, 69, 102, 109, 116, 32, 16, 0, 0, 0,
+    1, 0, 1, 0, 64, 31, 0, 0, 128, 62, 0, 0, 2, 0, 16, 0, 100, 97, 116, 97, 8,
+    0, 0, 0, 0, 0, 20, 10, 20, 10, 0, 0,
   ]);
   let binary = "";
   wavBytes.forEach((value) => {
@@ -628,12 +652,12 @@ endobj
 endobj
 xref
 0 6
-0000000000 65535 f 
-0000000009 00000 n 
-0000000058 00000 n 
-0000000115 00000 n 
-0000000241 00000 n 
-0000000349 00000 n 
+0000000000 65535 f
+0000000009 00000 n
+0000000058 00000 n
+0000000115 00000 n
+0000000241 00000 n
+0000000349 00000 n
 trailer
 << /Size 6 /Root 1 0 R >>
 startxref
@@ -660,14 +684,16 @@ function totalUnread(): number {
   return snapshot.chats.reduce((sum, chat) => sum + chat.unreadCount, 0);
 }
 
-export async function startChatWithPeer(deviceId: string): Promise<ClientSnapshot> {
+export async function startChatWithPeer(
+  deviceId: string,
+): Promise<ClientSnapshot> {
   const peer = snapshot.peers.find((p) => p.deviceId === deviceId);
   if (!peer) {
     throw new Error(`Peer ${deviceId} not found`);
   }
 
-  const existingChat = snapshot.chats.find(
-    (c) => c.participants.includes(peer.deviceName),
+  const existingChat = snapshot.chats.find((c) =>
+    c.participants.includes(peer.deviceName),
   );
   if (existingChat) {
     return cloneSnapshot();
