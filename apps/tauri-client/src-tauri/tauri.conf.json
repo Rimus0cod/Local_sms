@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Local Messenger",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.rimus.localmessenger",
   "build": {
     "beforeDevCommand": "npm run dev -- --host 127.0.0.1",

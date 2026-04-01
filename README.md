@@ -2,10 +2,18 @@
 
 Secure local-first messenger for a small trusted group.
 
+> [!WARNING]
+> **This software has not undergone a formal security audit.**
+> It is intended for small trusted groups who know each other in person.
+> Do not use for high-risk communications until an independent audit is complete.
+> See [docs/threat-model.md](docs/threat-model.md) for the full threat model and known limitations.
+
 ## Installation
 
 Pre-built installers are published with every tagged release on GitHub:  
 **<https://github.com/Rimus0cod/Local_sms/releases/latest>**
+
+> **v1.0.0** — First public release. Includes group chats with sender-key fan-out, encrypted media transfer, Docker relay, and durable message queues.
 
 ### Windows
 

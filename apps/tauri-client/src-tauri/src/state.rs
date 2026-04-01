@@ -2226,6 +2226,6 @@ mod tests {
                 .expect("pdf preview")
                 .starts_with("data:application/pdf")
         );
-        assert_eq!(snapshot.updater.current_version, "0.1.0");
+        assert_eq!(snapshot.updater.current_version, "1.0.0");
     }
 }

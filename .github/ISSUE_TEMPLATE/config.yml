@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security Vulnerability
+    url: https://github.com/Rimus0cod/Local_sms/security/advisories/new
+    about: Please report security vulnerabilities via GitHub Security Advisories, not public issues.
+  - name: Discussions & Questions
+    url: https://github.com/Rimus0cod/Local_sms/discussions
+    about: For general questions and discussions, use GitHub Discussions.
