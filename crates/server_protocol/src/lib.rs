@@ -4,12 +4,15 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, Mac};
 use localmessenger_core::{DeviceId, MemberId};
+use localmessenger_crypto::{IdentityKeyPair, IdentityPublicKeys, PublicPrekeyBundle};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 pub const SERVER_PROTOCOL_VERSION: u8 = 1;
 pub const AUTH_CONTEXT: &[u8] = b"localmessenger/server-auth/v1";
 pub const INVITE_LINK_PREFIX: &str = "localmessenger://join?token=";
+pub const CONTACT_INVITE_CONTEXT: &[u8] = b"localmessenger/contact-invite/v1";
+pub const CONTACT_INVITE_LINK_PREFIX: &str = "localmessenger://contact?token=";
 pub const MAX_RELAY_BLOB_BYTES: u64 = 5 * 1024 * 1024;
 pub const MAX_BLOB_CHUNK_BYTES: usize = 64 * 1024;
 
@@ -64,6 +67,77 @@ impl InviteClaims {
     }
 }
 
+impl DeviceContactInvite {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.version != SERVER_PROTOCOL_VERSION {
+            return Err(format!(
+                "unsupported contact invite version {}",
+                self.version
+            ));
+        }
+        MemberId::new(self.member_id.clone()).map_err(|error| error.to_string())?;
+        DeviceId::new(self.device_id.clone()).map_err(|error| error.to_string())?;
+        if self.display_name.trim().is_empty() {
+            return Err("contact display name cannot be empty".to_string());
+        }
+        if self.server_addr.trim().is_empty() {
+            return Err("contact server addr cannot be empty".to_string());
+        }
+        if self.server_name.trim().is_empty() {
+            return Err("contact server name cannot be empty".to_string());
+        }
+        if self.expires_at_unix_ms <= self.issued_at_unix_ms {
+            return Err("contact invite expiry must be after issue time".to_string());
+        }
+        decode_contact_invite_server_certificate(self)?;
+        decode_contact_invite_device_transport_certificate(self)?;
+        self.prekey_bundle
+            .verify()
+            .map_err(|error| error.to_string())?;
+        if self.prekey_bundle.identity != self.identity_keys {
+            return Err("contact invite prekey bundle identity mismatch".to_string());
+        }
+        verify_contact_invite(self)?;
+        Ok(())
+    }
+
+    pub fn unsigned_payload(&self) -> Result<Vec<u8>, String> {
+        let unsigned = UnsignedDeviceContactInvite {
+            version: self.version,
+            member_id: self.member_id.clone(),
+            device_id: self.device_id.clone(),
+            display_name: self.display_name.clone(),
+            server_addr: self.server_addr.clone(),
+            server_name: self.server_name.clone(),
+            server_certificate_der_base64: self.server_certificate_der_base64.clone(),
+            device_transport_certificate_der_base64: self
+                .device_transport_certificate_der_base64
+                .clone(),
+            identity_keys: self.identity_keys.clone(),
+            prekey_bundle: self.prekey_bundle.clone(),
+            issued_at_unix_ms: self.issued_at_unix_ms,
+            expires_at_unix_ms: self.expires_at_unix_ms,
+        };
+        serde_json::to_vec(&unsigned).map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct UnsignedDeviceContactInvite {
+    version: u8,
+    member_id: String,
+    device_id: String,
+    display_name: String,
+    server_addr: String,
+    server_name: String,
+    server_certificate_der_base64: String,
+    device_transport_certificate_der_base64: String,
+    identity_keys: IdentityPublicKeys,
+    prekey_bundle: PublicPrekeyBundle,
+    issued_at_unix_ms: i64,
+    expires_at_unix_ms: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvitePreview {
     pub invite_id: String,
@@ -72,6 +146,33 @@ pub struct InvitePreview {
     pub server_name: String,
     pub expires_at_unix_ms: i64,
     pub max_uses: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceContactInvite {
+    pub version: u8,
+    pub member_id: String,
+    pub device_id: String,
+    pub display_name: String,
+    pub server_addr: String,
+    pub server_name: String,
+    pub server_certificate_der_base64: String,
+    pub device_transport_certificate_der_base64: String,
+    pub identity_keys: IdentityPublicKeys,
+    pub prekey_bundle: PublicPrekeyBundle,
+    pub issued_at_unix_ms: i64,
+    pub expires_at_unix_ms: i64,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContactInvitePreview {
+    pub member_id: String,
+    pub device_id: String,
+    pub display_name: String,
+    pub server_addr: String,
+    pub server_name: String,
+    pub expires_at_unix_ms: i64,
 }
 
 impl DeviceRegistrationBundle {
@@ -430,16 +531,96 @@ pub fn decode_invite_certificate(claims: &InviteClaims) -> Result<Vec<u8>, Strin
         .map_err(|error| error.to_string())
 }
 
+pub fn sign_contact_invite(
+    identity: &IdentityKeyPair,
+    invite: &mut DeviceContactInvite,
+) -> Result<(), String> {
+    let payload = contact_invite_signature_payload(invite)?;
+    invite.signature = identity.sign_message(&payload).to_vec();
+    Ok(())
+}
+
+pub fn verify_contact_invite(invite: &DeviceContactInvite) -> Result<(), String> {
+    let payload = contact_invite_signature_payload(invite)?;
+    invite
+        .identity_keys
+        .verify_message(&payload, &invite.signature)
+        .map_err(|error| error.to_string())
+}
+
+pub fn encode_contact_invite_link(invite: &DeviceContactInvite) -> Result<String, String> {
+    invite.validate()?;
+    let payload = serde_json::to_vec(invite).map_err(|error| error.to_string())?;
+    Ok(format!(
+        "{CONTACT_INVITE_LINK_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(payload)
+    ))
+}
+
+pub fn parse_contact_invite_link(link: &str) -> Result<DeviceContactInvite, String> {
+    let token = link
+        .strip_prefix(CONTACT_INVITE_LINK_PREFIX)
+        .ok_or_else(|| {
+            "contact invite link must start with localmessenger://contact?token=".to_string()
+        })?;
+    let payload = URL_SAFE_NO_PAD
+        .decode(token)
+        .map_err(|error| error.to_string())?;
+    let invite: DeviceContactInvite =
+        serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
+    invite.validate()?;
+    Ok(invite)
+}
+
+pub fn contact_invite_preview(invite: &DeviceContactInvite) -> ContactInvitePreview {
+    ContactInvitePreview {
+        member_id: invite.member_id.clone(),
+        device_id: invite.device_id.clone(),
+        display_name: invite.display_name.clone(),
+        server_addr: invite.server_addr.clone(),
+        server_name: invite.server_name.clone(),
+        expires_at_unix_ms: invite.expires_at_unix_ms,
+    }
+}
+
+pub fn decode_contact_invite_server_certificate(
+    invite: &DeviceContactInvite,
+) -> Result<Vec<u8>, String> {
+    URL_SAFE_NO_PAD
+        .decode(&invite.server_certificate_der_base64)
+        .map_err(|error| error.to_string())
+}
+
+pub fn decode_contact_invite_device_transport_certificate(
+    invite: &DeviceContactInvite,
+) -> Result<Vec<u8>, String> {
+    URL_SAFE_NO_PAD
+        .decode(&invite.device_transport_certificate_der_base64)
+        .map_err(|error| error.to_string())
+}
+
+fn contact_invite_signature_payload(invite: &DeviceContactInvite) -> Result<Vec<u8>, String> {
+    let unsigned = invite.unsigned_payload()?;
+    let mut payload = Vec::with_capacity(CONTACT_INVITE_CONTEXT.len() + unsigned.len());
+    payload.extend_from_slice(CONTACT_INVITE_CONTEXT);
+    payload.extend_from_slice(&unsigned);
+    Ok(payload)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        BlobUploadStart, DeviceRegistrationBundle, INVITE_LINK_PREFIX, InviteClaims,
-        MAX_RELAY_BLOB_BYTES, MediaKind, auth_challenge_payload, encode_invite_link,
-        invite_preview_from_claims, verify_invite_link,
+        BlobUploadStart, CONTACT_INVITE_LINK_PREFIX, DeviceContactInvite, DeviceRegistrationBundle,
+        INVITE_LINK_PREFIX, InviteClaims, MAX_RELAY_BLOB_BYTES, MediaKind,
+        auth_challenge_payload, contact_invite_preview, encode_contact_invite_link,
+        encode_invite_link, invite_preview_from_claims, parse_contact_invite_link,
+        sign_contact_invite, verify_invite_link,
     };
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use localmessenger_core::{DeviceId, MemberId};
+    use localmessenger_crypto::{IdentityKeyPair, LocalPrekeyStore};
+    use rand_core::OsRng;
 
     #[test]
     fn registration_bundle_validates_ids() {
@@ -475,6 +656,37 @@ mod tests {
         assert_eq!(verified.invite_id, "inv-1");
         assert_eq!(invite_preview_from_claims(&verified).label, "Home relay");
         assert!(verify_invite_link(b"wrong", &link).is_err());
+    }
+
+    #[test]
+    fn signed_contact_invite_round_trip_verifies() {
+        let mut rng = OsRng;
+        let identity = IdentityKeyPair::generate(&mut rng);
+        let prekeys = LocalPrekeyStore::generate(&mut rng, &identity, 7, 0, 0);
+        let mut invite = DeviceContactInvite {
+            version: super::SERVER_PROTOCOL_VERSION,
+            member_id: "alice".to_string(),
+            device_id: "alice-phone".to_string(),
+            display_name: "Alice".to_string(),
+            server_addr: "203.0.113.10:7443".to_string(),
+            server_name: "relay.local".to_string(),
+            server_certificate_der_base64: URL_SAFE_NO_PAD.encode([1_u8; 8]),
+            device_transport_certificate_der_base64: URL_SAFE_NO_PAD.encode([2_u8; 8]),
+            identity_keys: identity.public_keys(),
+            prekey_bundle: prekeys.public_bundle(),
+            issued_at_unix_ms: 100,
+            expires_at_unix_ms: 200,
+            signature: Vec::new(),
+        };
+        sign_contact_invite(&identity, &mut invite).expect("sign");
+
+        let link = encode_contact_invite_link(&invite).expect("link");
+        assert!(link.starts_with(CONTACT_INVITE_LINK_PREFIX));
+
+        let parsed = parse_contact_invite_link(&link).expect("parse");
+        let preview = contact_invite_preview(&parsed);
+        assert_eq!(preview.device_id, "alice-phone");
+        assert_eq!(parsed.signature, invite.signature);
     }
 
     #[test]

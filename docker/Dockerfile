@@ -1,11 +1,13 @@
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
-FROM rust:1.82-bookworm AS builder
+# Rust 1.88+ is required by the current Cargo.lock dependency set.
+FROM rust:1.88-bookworm AS builder
 WORKDIR /workspace
 
 # Copy workspace files needed for the server crate
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY apps/localmessenger_server/ apps/localmessenger_server/
+COPY apps/tauri-client/src-tauri/ apps/tauri-client/src-tauri/
 
 # Build only the relay server binary
 RUN cargo build --release -p localmessenger_server

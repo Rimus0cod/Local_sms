@@ -16,6 +16,8 @@ type SettingsPanelProps = {
   copy: CopyBundle;
   busy: boolean;
   inviteDraft: string;
+  contactInviteDraft: string;
+  generatedContactInvite: string;
   selectedVerificationDeviceId: string | null;
   onClose: () => void;
   onToggleTheme: () => void;
@@ -27,6 +29,10 @@ type SettingsPanelProps = {
   onInviteDraftChange: (value: string) => void;
   onPreviewInvite: () => void;
   onAcceptInvite: () => void;
+  onContactInviteDraftChange: (value: string) => void;
+  onCreateContactInvite: () => void;
+  onPreviewContactInvite: () => void;
+  onAcceptContactInvite: () => void;
   onCheckForUpdates: () => void;
 };
 
@@ -40,6 +46,8 @@ export function SettingsPanel({
   copy,
   busy,
   inviteDraft,
+  contactInviteDraft,
+  generatedContactInvite,
   selectedVerificationDeviceId,
   onClose,
   onToggleTheme,
@@ -51,6 +59,10 @@ export function SettingsPanel({
   onInviteDraftChange,
   onPreviewInvite,
   onAcceptInvite,
+  onContactInviteDraftChange,
+  onCreateContactInvite,
+  onPreviewContactInvite,
+  onAcceptContactInvite,
   onCheckForUpdates,
 }: SettingsPanelProps) {
   const [section, setSection] = useState<SettingsSection>("main");
@@ -135,11 +147,17 @@ export function SettingsPanel({
           <SettingsRelay
             copy={copy}
             inviteDraft={inviteDraft}
+            contactInviteDraft={contactInviteDraft}
+            generatedContactInvite={generatedContactInvite}
             busy={busy}
             onBack={() => setSection("main")}
             onInviteDraftChange={onInviteDraftChange}
             onPreview={onPreviewInvite}
             onAccept={onAcceptInvite}
+            onContactInviteDraftChange={onContactInviteDraftChange}
+            onCreateContactInvite={onCreateContactInvite}
+            onPreviewContactInvite={onPreviewContactInvite}
+            onAcceptContactInvite={onAcceptContactInvite}
           />
         ) : null}
 
@@ -572,19 +590,31 @@ function SettingsNetwork({
 function SettingsRelay({
   copy,
   inviteDraft,
+  contactInviteDraft,
+  generatedContactInvite,
   busy,
   onBack,
   onInviteDraftChange,
   onPreview,
   onAccept,
+  onContactInviteDraftChange,
+  onCreateContactInvite,
+  onPreviewContactInvite,
+  onAcceptContactInvite,
 }: {
   copy: CopyBundle;
   inviteDraft: string;
+  contactInviteDraft: string;
+  generatedContactInvite: string;
   busy: boolean;
   onBack: () => void;
   onInviteDraftChange: (v: string) => void;
   onPreview: () => void;
   onAccept: () => void;
+  onContactInviteDraftChange: (v: string) => void;
+  onCreateContactInvite: () => void;
+  onPreviewContactInvite: () => void;
+  onAcceptContactInvite: () => void;
 }) {
   return (
     <>
@@ -620,6 +650,57 @@ function SettingsRelay({
               type="button"
             >
               {copy.settingsJoinButton}
+            </button>
+          </div>
+        </div>
+
+        <div className="settings-group">
+          <div className="settings-group-label">Create contact invite</div>
+          <div className="settings-actions">
+            <button
+              className="settings-btn primary"
+              disabled={busy}
+              onClick={onCreateContactInvite}
+              type="button"
+            >
+              Generate contact invite
+            </button>
+          </div>
+          {generatedContactInvite ? (
+            <textarea
+              className="settings-textarea"
+              readOnly
+              rows={4}
+              value={generatedContactInvite}
+            />
+          ) : null}
+        </div>
+
+        <div className="settings-group">
+          <div className="settings-group-label">Accept contact invite</div>
+          <textarea
+            className="settings-textarea"
+            onChange={(e) => onContactInviteDraftChange(e.target.value)}
+            placeholder="localmessenger://contact..."
+            rows={4}
+            value={contactInviteDraft}
+          />
+          <div className="settings-actions">
+            <button
+              className="settings-btn secondary"
+              disabled={busy || contactInviteDraft.trim().length === 0}
+              onClick={onPreviewContactInvite}
+              type="button"
+            >
+              Preview contact
+            </button>
+            <button
+              className="settings-btn primary"
+              disabled={busy || contactInviteDraft.trim().length === 0}
+              onClick={onAcceptContactInvite}
+              type="button"
+            >
+              Add contact
             </button>
           </div>
         </div>

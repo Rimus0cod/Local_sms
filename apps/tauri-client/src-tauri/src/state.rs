@@ -1,17 +1,28 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::path::PathBuf;
 
 use base64::Engine;
+use crate::connection_manager::{ConnectionEvent, ConnectionManager, PeerTransportPresence};
 use localmessenger_core::{
     Device, DeviceId, MemberId, MemberProfile, VerificationMethod, VerificationStatus,
 };
-use localmessenger_crypto::{IdentityKeyMaterial, IdentityKeyPair};
+use localmessenger_crypto::{
+    IdentityKeyMaterial, IdentityKeyPair, LocalPrekeyStore, PrekeyStoreMaterial,
+};
 use localmessenger_discovery::{
     DiscoveredPeer, DiscoveryConfig, DiscoveryEvent, DiscoveryService, LocalPeerAnnouncement,
     PeerCapability,
 };
-use localmessenger_server_protocol::{DeviceRegistrationBundle, InvitePreview};
-use localmessenger_storage::{SqliteStorage, StorageKey, StoredMessageKind, StoredPendingOutbound};
+use localmessenger_server_protocol::{
+    ContactInvitePreview, DeviceContactInvite, DeviceRegistrationBundle, InvitePreview,
+    contact_invite_preview, decode_contact_invite_server_certificate, encode_contact_invite_link,
+    parse_contact_invite_link, sign_contact_invite,
+};
+use localmessenger_storage::{
+    SqliteStorage, StorageKey, StoredLocalDeviceSecrets, StoredMessageKind, StoredPendingOutbound,
+    StoredRemotePeerOffer, StoredTransportIdentity,
+};
 use rand_core::OsRng;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -28,6 +39,7 @@ use crate::runtime::{
     DirectChatRuntime, GroupChatRuntime, GroupRemoteMemberSpec, bootstrap_direct_chat_runtime,
     bootstrap_group_chat_runtime,
 };
+use localmessenger_transport::TransportIdentity;
 
 pub type SharedClientState = Mutex<ClientState>;
 
@@ -35,6 +47,8 @@ pub struct ClientState {
     local_profile: MemberProfile,
     local_device_id: DeviceId,
     local_identity_material: IdentityKeyMaterial,
+    local_prekey_store_material: PrekeyStoreMaterial,
+    local_transport_identity: TransportIdentity,
     contacts: Vec<MemberProfile>,
     contact_runtimes: BTreeMap<String, DirectChatRuntime>,
     group_runtimes: BTreeMap<String, GroupChatRuntime>,
@@ -44,9 +58,12 @@ pub struct ClientState {
     relay_client: Option<RelayClient>,
     relay_config: Option<RelayClientConfig>,
     preferred_routes: Vec<TransportRoute>,
+    connection_manager: ConnectionManager,
+    peer_presence: BTreeMap<String, PeerTransportPresence>,
     server_status: RelayServerStatus,
     auth_status: RelayAuthStatus,
     invite_preview: Option<InvitePreviewView>,
+    contact_invite_preview: Option<ContactInvitePreviewView>,
     onboarding_status: String,
     updater_feed_url: Option<String>,
     updater_channel: String,
@@ -119,6 +136,7 @@ pub struct LocalProfileView {
 pub struct OnboardingView {
     pub status_label: String,
     pub invite_preview: Option<InvitePreviewView>,
+    pub contact_invite_preview: Option<ContactInvitePreviewView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -149,6 +167,17 @@ pub struct InvitePreviewView {
     pub server_name: String,
     pub expires_at_label: String,
     pub max_uses: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactInvitePreviewView {
+    pub member_id: String,
+    pub device_id: String,
+    pub display_name: String,
+    pub server_addr: String,
+    pub server_name: String,
+    pub expires_at_label: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -285,6 +314,299 @@ pub enum VerificationMethodCode {
 }
 
 impl ClientState {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Production bootstrap — persistent identity in SQLite
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Production entry point.  Called from `lib.rs` inside Tauri's `setup`
+    /// hook where `AppHandle::path().app_data_dir()` is available.
+    ///
+    /// On first launch the function generates an Ed25519 identity keypair,
+    /// saves it to an encrypted SQLite database and records a 32-byte
+    /// bootstrap key alongside it.  On every subsequent launch it reloads the
+    /// same key material so the user is always the same cryptographic identity.
+    pub async fn bootstrap_persistent(app_data_dir: PathBuf) -> Result<Self, String> {
+        use rand_core::RngCore;
+
+        let mut rng = OsRng;
+
+        fs::create_dir_all(&app_data_dir).map_err(|e| format!("create app-data dir: {e}"))?;
+
+        // ── 1. Load or create the 32-byte bootstrap storage key ───────────
+        let key_path = app_data_dir.join("bootstrap.key");
+        let storage_key = load_or_create_storage_key(&key_path, &mut rng)?;
+
+        // ── 2. Open encrypted SQLite ──────────────────────────────────────
+        let db_url = format!(
+            "sqlite://{}",
+            app_data_dir.join("localmessenger.db").display()
+        );
+        let storage = SqliteStorage::open(&db_url, storage_key)
+            .await
+            .map_err(|e| format!("storage open failed: {e}"))?;
+
+        // ── 3. Stable device-id persisted in a small text file ───────────
+        let device_id_path = app_data_dir.join("device-id.txt");
+        let device_id_str = if device_id_path.exists() {
+            fs::read_to_string(&device_id_path)
+                .map_err(|e| format!("read device-id.txt: {e}"))?
+                .trim()
+                .to_string()
+        } else {
+            let mut raw = [0u8; 8];
+            rng.fill_bytes(&mut raw);
+            let generated = format!(
+                "device-{}",
+                raw.iter().map(|b| format!("{b:02x}")).collect::<String>()
+            );
+            fs::write(&device_id_path, &generated)
+                .map_err(|e| format!("write device-id.txt: {e}"))?;
+            generated
+        };
+        let device_id = DeviceId::new(&device_id_str).map_err(|e| e.to_string())?;
+
+        // ── 4. Resolve display name ───────────────────────────────────────
+        let display_name = resolve_display_name();
+
+        // ── 5. Load existing identity or create a new one ────────────────
+        let (
+            local_device,
+            local_identity_material,
+            local_prekey_store_material,
+            local_transport_identity,
+        ) = if let Some(mut secrets) = storage
+            .local_device_secrets(&device_id)
+            .await
+            .map_err(|e| format!("load identity: {e}"))?
+        {
+            let material = secrets.identity_keypair().to_material();
+            let transport_identity = match secrets.transport_identity.clone() {
+                Some(stored) => TransportIdentity::from_der(
+                    stored.server_name,
+                    stored.certificate_der,
+                    stored.private_key_der,
+                ),
+                None => {
+                    let generated = TransportIdentity::generate(format!(
+                        "{}.device.local",
+                        device_id.as_str()
+                    ))
+                    .map_err(|e| e.to_string())?;
+                    secrets.transport_identity = Some(StoredTransportIdentity {
+                        server_name: generated.server_name.clone(),
+                        certificate_der: generated.certificate_der.clone(),
+                        private_key_der: generated.private_key_der.clone(),
+                    });
+                    storage
+                        .store_local_device_secrets(&secrets)
+                        .await
+                        .map_err(|e| format!("store transport identity: {e}"))?;
+                    generated
+                }
+            };
+            let device = secrets.device.clone();
+            let prekey_store_material = secrets.prekey_store_material.clone();
+            (
+                device,
+                material,
+                prekey_store_material,
+                transport_identity,
+            )
+        } else {
+            // First launch — generate identity, prekeys and save everything.
+            let identity = IdentityKeyPair::generate(&mut rng);
+            let material = identity.to_material();
+
+            // member-id: keep only alphanumeric + dash chars (safe identifiers)
+            let member_id_str: String = device_id_str
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+                .collect();
+            let member_id = MemberId::new(&member_id_str).map_err(|e| e.to_string())?;
+
+            let prekey_seed = rng.next_u32() % 50_000;
+            let prekeys = LocalPrekeyStore::generate(&mut rng, &identity, prekey_seed, 4, 10_000);
+            let transport_identity = TransportIdentity::generate(format!(
+                "{}.device.local",
+                device_id.as_str()
+            ))
+            .map_err(|e| e.to_string())?;
+
+            let device_label = format!("{} {}", display_name, system_device_name());
+            let mut device = Device::from_identity_keypair(
+                device_id.clone(),
+                member_id,
+                &device_label,
+                &identity,
+            )
+            .map_err(|e| e.to_string())?;
+
+            // Self-verify so the local device starts in a trusted state.
+            let qr = device.qr_payload(None).map_err(|e| e.to_string())?;
+            device
+                .verify_with_qr_payload(&qr)
+                .map_err(|e| e.to_string())?;
+
+            let stored = StoredLocalDeviceSecrets::from_runtime(
+                device.clone(),
+                &identity,
+                &prekeys,
+                Some(StoredTransportIdentity {
+                    server_name: transport_identity.server_name.clone(),
+                    certificate_der: transport_identity.certificate_der.clone(),
+                    private_key_der: transport_identity.private_key_der.clone(),
+                }),
+            )
+            .map_err(|e| e.to_string())?;
+            storage
+                .store_local_device_secrets(&stored)
+                .await
+                .map_err(|e| format!("store identity: {e}"))?;
+
+            (device, material, prekeys.to_material(), transport_identity)
+        };
+
+        // ── 6. Build local MemberProfile ──────────────────────────────────
+        let member_id = local_device.owner_member_id().clone();
+        let local_device_id = local_device.device_id().clone();
+        let mut local_profile =
+            MemberProfile::new(member_id.clone(), &display_name).map_err(|e| e.to_string())?;
+        local_profile
+            .add_device(local_device.clone())
+            .map_err(|e| e.to_string())?;
+
+        // ── 7. mDNS discovery ─────────────────────────────────────────────
+        let local_announcement = LocalPeerAnnouncement::new(
+            member_id.clone(),
+            local_device_id.clone(),
+            local_device.device_name(),
+            46011,
+            vec![PeerCapability::MessagingV1, PeerCapability::PresenceV1],
+        )
+        .map_err(|e| e.to_string())?;
+
+        let discovery_service =
+            match DiscoveryService::start(DiscoveryConfig::default(), local_announcement) {
+                Ok(svc) => Some(svc),
+                Err(e) => {
+                    eprintln!("mDNS discovery failed to start: {e}");
+                    None
+                }
+            };
+
+        // ── 8. Relay client from environment variables ────────────────────
+        let (relay_client, relay_config, preferred_routes, server_status, auth_status) =
+            match RelayClientConfig::from_env(local_device_id.as_str())? {
+                Some(config) => {
+                    let auth_device_id =
+                        DeviceId::new(config.auth_device_id.clone()).map_err(|e| e.to_string())?;
+                    // Use local device as auth device; in a full implementation
+                    // this would look up the matching device from storage.
+                    let auth_device = if auth_device_id == local_device_id {
+                        local_device.clone()
+                    } else {
+                        local_device.clone()
+                    };
+                    match RelayClient::connect(&config, &auth_device, &local_identity_material)
+                        .await
+                    {
+                        Ok(bootstrap) => (
+                            Some(bootstrap.client),
+                            Some(config.clone()),
+                            config.preferred_routes,
+                            bootstrap.server_status,
+                            bootstrap.auth_status,
+                        ),
+                        Err(_) => (
+                            None,
+                            Some(config.clone()),
+                            config.preferred_routes,
+                            RelayServerStatus::Failed,
+                            RelayAuthStatus::Failed,
+                        ),
+                    }
+                }
+                None => (
+                    None,
+                    None,
+                    vec![TransportRoute::DirectLan],
+                    RelayServerStatus::Disabled,
+                    RelayAuthStatus::Disabled,
+                ),
+            };
+
+        // ── 9. Pending queue storage (same DB, separate storage key) ──────
+        let pending_key_bytes: [u8; 32] = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(b"localmessenger/pending-store/v1");
+            h.update(&local_identity_material.signing_secret_key);
+            h.finalize().into()
+        };
+        let pending_store =
+            match SqliteStorage::open(&db_url, StorageKey::from_bytes(pending_key_bytes)).await {
+                Ok(s) => Some(s),
+                Err(_) => None,
+            };
+        let stored_remote_offers = match &pending_store {
+            Some(store) => store.list_remote_peer_offers().await.unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let mut connection_manager = ConnectionManager::new(
+            local_device.clone(),
+            local_identity_material.clone(),
+            local_prekey_store_material.clone(),
+            local_transport_identity.clone(),
+            relay_client.clone(),
+        );
+        for stored_offer in &stored_remote_offers {
+            let _ = connection_manager.upsert_contact_invite(stored_offer.invite.clone());
+        }
+
+        let mut state = Self {
+            local_profile,
+            local_device_id,
+            local_identity_material,
+            local_prekey_store_material,
+            local_transport_identity,
+            contacts: vec![],
+            contact_runtimes: BTreeMap::new(),
+            group_runtimes: BTreeMap::new(),
+            chat_runtime_device_ids: BTreeMap::new(),
+            discovered_peers: BTreeMap::new(),
+            discovery_service,
+            relay_client,
+            relay_config,
+            preferred_routes,
+            connection_manager,
+            peer_presence: BTreeMap::new(),
+            server_status,
+            auth_status,
+            invite_preview: None,
+            contact_invite_preview: None,
+            onboarding_status: "Paste an invite link to join a relay server.".to_string(),
+            updater_feed_url: std::env::var("LOCALMESSENGER_UPDATER_FEED").ok(),
+            updater_channel: std::env::var("LOCALMESSENGER_UPDATER_CHANNEL")
+                .unwrap_or_else(|_| "stable".to_string()),
+            updater_status: "Updater is ready.".to_string(),
+            updater_last_checked_label: "never".to_string(),
+            updater_can_auto_update: false,
+            tray_status: "Tray idle".to_string(),
+            last_notification: "No notifications yet".to_string(),
+            chats: vec![],
+            message_counter: 0,
+            pending_store,
+        };
+        for stored_offer in stored_remote_offers {
+            state.register_remote_contact(&stored_offer.invite)?;
+        }
+        Ok(state)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Demo bootstrap — in-memory fake data used by unit tests
+    // ─────────────────────────────────────────────────────────────────────────
+
     pub async fn bootstrap() -> Result<Self, String> {
         let mut rng = OsRng;
 
@@ -294,6 +616,10 @@ impl ClientState {
 
         let local_identity = IdentityKeyPair::generate(&mut rng);
         let local_identity_material = local_identity.to_material();
+        let local_prekey_store_material =
+            LocalPrekeyStore::generate(&mut rng, &local_identity, 11, 0, 0).to_material();
+        let local_transport_identity =
+            TransportIdentity::generate("rimus-laptop.device.local").map_err(|e| e.to_string())?;
         let mut rimus_laptop = Device::from_identity_keypair(
             DeviceId::new("rimus-laptop").map_err(|error| error.to_string())?,
             rimus_id.clone(),
@@ -648,11 +974,20 @@ impl ClientState {
                 Ok(store) => Some(store),
                 Err(_) => None,
             };
+        let connection_manager = ConnectionManager::new(
+            local_reference.clone(),
+            local_identity_material.clone(),
+            local_prekey_store_material.clone(),
+            local_transport_identity.clone(),
+            relay_client.clone(),
+        );
 
         Ok(Self {
-            local_profile: rimus,
+            local_profile:          rimus,
             local_device_id,
             local_identity_material,
+            local_prekey_store_material,
+            local_transport_identity,
             contacts,
             contact_runtimes,
             group_runtimes,
@@ -662,9 +997,12 @@ impl ClientState {
             relay_client,
             relay_config,
             preferred_routes,
+            connection_manager,
+            peer_presence: BTreeMap::new(),
             server_status,
             auth_status,
             invite_preview: None,
+            contact_invite_preview: None,
             onboarding_status: "Paste an invite link to join a relay.".to_string(),
             updater_feed_url: std::env::var("LOCALMESSENGER_UPDATER_FEED").ok(),
             updater_channel: std::env::var("LOCALMESSENGER_UPDATER_CHANNEL")
@@ -729,6 +1067,7 @@ impl ClientState {
             onboarding: OnboardingView {
                 status_label: self.onboarding_status.clone(),
                 invite_preview: self.invite_preview.clone(),
+                contact_invite_preview: self.contact_invite_preview.clone(),
             },
             updater: UpdaterView {
                 current_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -741,18 +1080,37 @@ impl ClientState {
         }
     }
 
+    pub fn poll_background_state(&mut self) {
+        self.drain_connection_events();
+        self.sync_chat_labels();
+    }
+
     pub fn refresh_peer_discovery(&mut self) {
+        self.drain_connection_events();
+
         // Drain mDNS discovery events
         if let Some(service) = &self.discovery_service {
             let mut receiver = service.subscribe();
             loop {
                 match receiver.try_recv() {
                     Ok(DiscoveryEvent::PeerAdded(peer)) | Ok(DiscoveryEvent::PeerUpdated(peer)) => {
+                        if self.connection_manager.has_contact(peer.device_id.as_str()) {
+                            self.peer_presence.insert(
+                                peer.device_id.to_string(),
+                                PeerTransportPresence::LanOnline,
+                            );
+                        }
                         self.discovered_peers
                             .insert(peer.device_id.to_string(), peer);
                     }
                     Ok(DiscoveryEvent::PeerExpired(peer)) => {
                         self.discovered_peers.remove(peer.device_id.as_str());
+                        if self.connection_manager.has_contact(peer.device_id.as_str()) {
+                            self.peer_presence.insert(
+                                peer.device_id.to_string(),
+                                PeerTransportPresence::OfflineButQueueable,
+                            );
+                        }
                     }
                     Err(_) => break,
                 }
@@ -867,6 +1225,7 @@ impl ClientState {
         body: &str,
         reply_to_message_id: Option<&str>,
     ) -> Result<(), String> {
+        self.drain_connection_events();
         let trimmed = body.trim();
         if trimmed.is_empty() {
             return Err("message body cannot be empty".to_string());
@@ -962,66 +1321,83 @@ impl ClientState {
         let outbound_message_id = format!("local-{}", self.message_counter);
         let sent_at_unix_ms = now_unix_ms();
 
-        let (remote_author, outcome) = {
-            let runtime = self
-                .contact_runtimes
-                .get_mut(&remote_device_id)
-                .ok_or_else(|| format!("runtime for device '{remote_device_id}' is missing"))?;
-            let remote_author = runtime.remote_display_name().to_string();
-            let outcome = runtime
-                .send_text(
-                    chat_id,
-                    outbound_message_id.clone(),
-                    sent_at_unix_ms,
-                    trimmed.to_string(),
-                )
-                .await?;
-            (remote_author, outcome)
-        };
+        let remote_author = self
+            .remote_display_name_for_device(&remote_device_id)
+            .unwrap_or_else(|| "Remote peer".to_string());
+        let (outbound_acknowledged, forward_secrecy_active, immediate_inbound_messages) =
+            if self.contact_runtimes.contains_key(&remote_device_id) {
+                let outcome = {
+                    let runtime = self
+                        .contact_runtimes
+                        .get_mut(&remote_device_id)
+                        .ok_or_else(|| format!("runtime for device '{remote_device_id}' is missing"))?;
+                    runtime
+                        .send_text(
+                            chat_id,
+                            outbound_message_id.clone(),
+                            sent_at_unix_ms,
+                            trimmed.to_string(),
+                        )
+                        .await?
+                };
 
-        // Persist any still-unacknowledged outbound messages so they survive
-        // a restart if the peer goes offline before the ACK arrives.
-        if let Some(store) = &self.pending_store {
-            let snap = {
-                let runtime = self
-                    .contact_runtimes
-                    .get(&remote_device_id)
-                    .ok_or_else(|| format!("runtime for device '{remote_device_id}' is missing"))?;
-                runtime.engine_snapshot()
-            };
-            for msg in &snap.pending_messages {
-                if let Ok(entry) = StoredPendingOutbound::new(
-                    remote_device_id.as_str(),
-                    msg.delivery_order(),
-                    msg.message_id(),
-                    msg.conversation_id(),
-                    msg.sent_at_unix_ms(),
-                    StoredMessageKind::Text,
-                    msg.body().to_vec(),
-                    msg.attempt_count(),
-                ) {
-                    let _ = store.upsert_pending_outbound(&entry).await;
+                if let Some(store) = &self.pending_store {
+                    let snap = {
+                        let runtime = self
+                            .contact_runtimes
+                            .get(&remote_device_id)
+                            .ok_or_else(|| format!("runtime for device '{remote_device_id}' is missing"))?;
+                        runtime.engine_snapshot()
+                    };
+                    for msg in &snap.pending_messages {
+                        if let Ok(entry) = StoredPendingOutbound::new(
+                            remote_device_id.as_str(),
+                            msg.delivery_order(),
+                            msg.message_id(),
+                            msg.conversation_id(),
+                            msg.sent_at_unix_ms(),
+                            StoredMessageKind::Text,
+                            msg.body().to_vec(),
+                            msg.attempt_count(),
+                        ) {
+                            let _ = store.upsert_pending_outbound(&entry).await;
+                        }
+                    }
+                    if outcome.outbound_acknowledged {
+                        let _ = store
+                            .remove_pending_outbound(remote_device_id.as_str(), &outbound_message_id)
+                            .await;
+                    }
                 }
-            }
-            // Remove messages that were acknowledged this round.
-            for acked_id in outcome
-                .inbound_messages
-                .iter()
-                .map(|_| &outbound_message_id)
-            {
-                let _ = store
-                    .remove_pending_outbound(remote_device_id.as_str(), acked_id)
-                    .await;
-            }
-            if outcome.outbound_acknowledged {
-                let _ = store
-                    .remove_pending_outbound(remote_device_id.as_str(), &outbound_message_id)
-                    .await;
-            }
-        }
+
+                (
+                    outcome.outbound_acknowledged,
+                    outcome.forward_secrecy_active,
+                    outcome.inbound_messages,
+                )
+            } else if self.connection_manager.has_contact(&remote_device_id) {
+                let outcome = self
+                    .connection_manager
+                    .send_text(
+                        &remote_device_id,
+                        chat_id.to_string(),
+                        outbound_message_id.clone(),
+                        sent_at_unix_ms,
+                        trimmed.to_string(),
+                    )
+                    .await?;
+                self.drain_connection_events();
+                (
+                    outcome.outbound_acknowledged,
+                    outcome.forward_secrecy_active,
+                    Vec::new(),
+                )
+            } else {
+                return Err(format!("runtime for device '{remote_device_id}' is missing"));
+            };
 
         let security_label =
-            self.security_label_for_device(&remote_device_id, outcome.forward_secrecy_active);
+            self.security_label_for_device(&remote_device_id, forward_secrecy_active);
 
         let chat = self
             .chats
@@ -1034,9 +1410,9 @@ impl ClientState {
             body: trimmed.to_string(),
             timestamp_label: timestamp_label(sent_at_unix_ms),
             direction: MessageDirectionView::Outbound,
-            delivery_state: if !outcome.inbound_messages.is_empty() {
+            delivery_state: if !immediate_inbound_messages.is_empty() {
                 DeliveryStateView::Seen
-            } else if outcome.outbound_acknowledged {
+            } else if outbound_acknowledged {
                 DeliveryStateView::Delivered
             } else {
                 DeliveryStateView::Sent
@@ -1047,7 +1423,7 @@ impl ClientState {
             attachments: Vec::new(),
         });
 
-        for inbound in outcome.inbound_messages {
+        for inbound in immediate_inbound_messages {
             chat.messages.push(MessageView {
                 id: inbound.message_id,
                 author: remote_author.clone(),
@@ -1079,7 +1455,7 @@ impl ClientState {
         }
         chat.presence_label = match preferred_route {
             TransportRoute::ServerRelay => {
-                "relay preferred, direct LAN fallback active for this demo chat".to_string()
+                "relay preferred, direct LAN fallback active".to_string()
             }
             TransportRoute::DirectLan => "secure session active · direct LAN".to_string(),
         };
@@ -1117,7 +1493,7 @@ impl ClientState {
         }
         let reply_preview = self.reply_preview_for(chat_id, reply_to_message_id)?;
 
-        let chat = self
+        let _chat = self
             .chats
             .iter()
             .find(|chat| chat.id == chat_id)
@@ -1402,11 +1778,61 @@ impl ClientState {
     pub fn preview_invite(&mut self, invite_link: &str) -> Result<(), String> {
         let preview = RelayClient::preview_invite(invite_link)?;
         self.invite_preview = Some(invite_preview_view(&preview));
+        self.contact_invite_preview = None;
         self.onboarding_status = format!(
             "Invite ready for {} at {}.",
             preview.label, preview.server_addr
         );
         self.push_notification(format!("Invite previewed for {}", preview.server_name));
+        Ok(())
+    }
+
+    pub fn create_contact_invite(&self) -> Result<String, String> {
+        let relay_config = self
+            .relay_config
+            .as_ref()
+            .ok_or_else(|| "join a relay before creating a contact invite".to_string())?;
+        let local_device = self
+            .local_profile
+            .device(&self.local_device_id)
+            .ok_or_else(|| "local active device is missing".to_string())?;
+        let identity = IdentityKeyPair::from_material(&self.local_identity_material);
+        let prekey_store = LocalPrekeyStore::from_material(self.local_prekey_store_material.clone())
+            .map_err(|error| error.to_string())?;
+        let mut public_bundle = prekey_store.public_bundle();
+        public_bundle.one_time_prekeys.clear();
+        let mut invite = DeviceContactInvite {
+            version: localmessenger_server_protocol::SERVER_PROTOCOL_VERSION,
+            member_id: local_device.owner_member_id().to_string(),
+            device_id: local_device.device_id().to_string(),
+            display_name: self.local_profile.display_name().to_string(),
+            server_addr: relay_config.server_addr.to_string(),
+            server_name: relay_config.server_name.clone(),
+            server_certificate_der_base64: base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(&relay_config.trusted_server_certificate_der),
+            device_transport_certificate_der_base64:
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(&self.local_transport_identity.certificate_der),
+            identity_keys: local_device.identity_keys().clone(),
+            prekey_bundle: public_bundle,
+            issued_at_unix_ms: now_unix_ms(),
+            expires_at_unix_ms: now_unix_ms().saturating_add(7 * 24 * 60 * 60 * 1000),
+            signature: Vec::new(),
+        };
+        sign_contact_invite(&identity, &mut invite)?;
+        encode_contact_invite_link(&invite)
+    }
+
+    pub fn preview_contact_invite(&mut self, invite_link: &str) -> Result<(), String> {
+        let invite = parse_contact_invite_link(invite_link)?;
+        let preview = contact_invite_preview(&invite);
+        self.invite_preview = None;
+        self.contact_invite_preview = Some(contact_invite_preview_view(&preview));
+        self.onboarding_status = format!(
+            "Contact invite ready for {} on {}.",
+            preview.display_name, preview.server_addr
+        );
+        self.push_notification(format!("Contact invite previewed for {}", preview.display_name));
         Ok(())
     }
 
@@ -1437,6 +1863,8 @@ impl ClientState {
         self.preferred_routes = preferred_routes;
         self.server_status = bootstrap.server_status;
         self.auth_status = bootstrap.auth_status;
+        self.connection_manager
+            .set_relay_client(self.relay_client.clone());
         self.invite_preview = Some(InvitePreviewView {
             invite_id: join.invite_id.clone(),
             label: "Joined relay".to_string(),
@@ -1451,6 +1879,151 @@ impl ClientState {
         Ok(())
     }
 
+    pub async fn accept_contact_invite(&mut self, invite_link: &str) -> Result<(), String> {
+        let invite = parse_contact_invite_link(invite_link)?;
+        if let Some(relay_config) = &self.relay_config {
+            let remote_server_certificate = decode_contact_invite_server_certificate(&invite)?;
+            if relay_config.server_addr.to_string() != invite.server_addr
+                || relay_config.server_name != invite.server_name
+                || relay_config.trusted_server_certificate_der != remote_server_certificate
+            {
+                return Err(
+                    "contact invite points to a different relay than the active desktop session"
+                        .to_string(),
+                );
+            }
+        }
+
+        if let Some(store) = &self.pending_store {
+            let _ = store
+                .upsert_remote_peer_offer(&StoredRemotePeerOffer {
+                    invite: invite.clone(),
+                })
+                .await;
+        }
+
+        self.connection_manager
+            .upsert_contact_invite(invite.clone())?;
+        self.register_remote_contact(&invite)?;
+        self.contact_invite_preview = Some(contact_invite_preview_view(&contact_invite_preview(
+            &invite,
+        )));
+        self.onboarding_status = format!(
+            "Accepted contact invite from {} ({}).",
+            invite.display_name, invite.device_id
+        );
+        self.push_notification(format!("Contact added: {}", invite.display_name));
+        Ok(())
+    }
+
+    fn register_remote_contact(&mut self, invite: &DeviceContactInvite) -> Result<(), String> {
+        let member_id = MemberId::new(invite.member_id.clone()).map_err(|error| error.to_string())?;
+        let device_id = DeviceId::new(invite.device_id.clone()).map_err(|error| error.to_string())?;
+        let device = Device::new(
+            device_id.clone(),
+            member_id.clone(),
+            invite.display_name.clone(),
+            invite.identity_keys.clone(),
+        )
+        .map_err(|error| error.to_string())?;
+
+        if let Some(member) = self
+            .contacts
+            .iter_mut()
+            .find(|member| member.member_id() == &member_id)
+        {
+            if member.device(&device_id).is_none() {
+                member.add_device(device).map_err(|error| error.to_string())?;
+            }
+        } else {
+            let mut member =
+                MemberProfile::new(member_id, invite.display_name.clone()).map_err(|e| e.to_string())?;
+            member.add_device(device).map_err(|error| error.to_string())?;
+            self.contacts.push(member);
+        }
+
+        self.peer_presence.insert(
+            invite.device_id.clone(),
+            PeerTransportPresence::OfflineButQueueable,
+        );
+
+        let chat_id = format!("chat-{}", invite.device_id);
+        if !self.chats.iter().any(|chat| chat.id == chat_id) {
+            self.chats.push(ChatThreadView {
+                id: chat_id.clone(),
+                title: invite.display_name.clone(),
+                summary: format!("Relay contact on {}", invite.server_name),
+                presence_label: "offline but queueable".to_string(),
+                presence_state: PresenceStateView::Offline,
+                unread_count: 0,
+                security_label: "Verification required before elevated trust".to_string(),
+                kind: ChatKindView::Direct,
+                participants: vec![
+                    self.local_profile.display_name().to_string(),
+                    invite.display_name.clone(),
+                ],
+                messages: Vec::new(),
+            });
+        }
+        self.chat_runtime_device_ids
+            .insert(chat_id, invite.device_id.clone());
+        self.sync_chat_labels();
+        Ok(())
+    }
+
+    fn remote_display_name_for_device(&self, device_id: &str) -> Option<String> {
+        self.contacts.iter().find_map(|member| {
+            member
+                .devices()
+                .find(|device| device.device_id().as_str() == device_id)
+                .map(|_| member.display_name().to_string())
+        })
+    }
+
+    fn drain_connection_events(&mut self) {
+        for event in self.connection_manager.drain_events() {
+            match event {
+                ConnectionEvent::PresenceChanged { device_id, presence } => {
+                    self.peer_presence.insert(device_id, presence);
+                }
+                ConnectionEvent::InboundMessage {
+                    device_id,
+                    conversation_id,
+                    message_id,
+                    body,
+                    sent_at_unix_ms,
+                } => {
+                    let author = self
+                        .remote_display_name_for_device(&device_id)
+                        .unwrap_or_else(|| "Remote peer".to_string());
+                    if let Some(chat) = self
+                        .chats
+                        .iter_mut()
+                        .find(|chat| chat.id == conversation_id)
+                    {
+                        if chat.messages.iter().any(|message| message.id == message_id) {
+                            continue;
+                        }
+                        chat.messages.push(MessageView {
+                            id: message_id,
+                            author,
+                            body: body.clone(),
+                            timestamp_label: timestamp_label(sent_at_unix_ms),
+                            direction: MessageDirectionView::Inbound,
+                            delivery_state: DeliveryStateView::Delivered,
+                            forwarded_from: None,
+                            reply_preview: None,
+                            reactions: Vec::new(),
+                            attachments: Vec::new(),
+                        });
+                        chat.summary = preview(&body);
+                        chat.unread_count = chat.unread_count.saturating_add(1);
+                    }
+                }
+            }
+        }
+    }
+
     fn peer_views(&self) -> Vec<PeerView> {
         let mut peers = Vec::new();
         let mut seen_device_ids = std::collections::BTreeSet::new();
@@ -1459,6 +2032,11 @@ impl ClientState {
             for device in member.devices() {
                 seen_device_ids.insert(device.device_id().to_string());
                 let runtime = self.contact_runtimes.get(device.device_id().as_str());
+                let connection_presence = self
+                    .peer_presence
+                    .get(device.device_id().as_str())
+                    .copied()
+                    .unwrap_or(PeerTransportPresence::OfflineButQueueable);
                 let (endpoint, hostname, capabilities, state, last_seen_label) =
                     if let Some(runtime) = runtime {
                         (
@@ -1486,12 +2064,20 @@ impl ClientState {
                             },
                         )
                     } else {
+                        let relay_label = match connection_presence {
+                            PeerTransportPresence::LanOnline => "reachable on LAN",
+                            PeerTransportPresence::RelayOnline => "reachable through relay",
+                            PeerTransportPresence::OfflineButQueueable => "offline but relay queue is available",
+                        };
                         (
-                            "unknown endpoint".to_string(),
+                            "relay-routed contact".to_string(),
                             None,
-                            Vec::new(),
-                            PeerStateCode::Dormant,
-                            "no active runtime".to_string(),
+                            vec!["messaging-v1".to_string()],
+                            match connection_presence {
+                                PeerTransportPresence::LanOnline | PeerTransportPresence::RelayOnline => PeerStateCode::Live,
+                                PeerTransportPresence::OfflineButQueueable => PeerStateCode::Dormant,
+                            },
+                            relay_label.to_string(),
                         )
                     };
 
@@ -1603,21 +2189,32 @@ impl ClientState {
     }
 
     fn sync_chat_labels(&mut self) {
-        let updates: Vec<(String, String, PresenceStateView)> = self
+        let updates: Vec<(String, String, PresenceStateView, String)> = self
             .chat_runtime_device_ids
             .iter()
             .map(|(chat_id, device_id)| {
+                let route_label = match self
+                    .peer_presence
+                    .get(device_id.as_str())
+                    .copied()
+                    .unwrap_or(PeerTransportPresence::OfflineButQueueable)
+                {
+                    PeerTransportPresence::LanOnline => "lan_online".to_string(),
+                    PeerTransportPresence::RelayOnline => "relay_online".to_string(),
+                    PeerTransportPresence::OfflineButQueueable => "offline_but_queueable".to_string(),
+                };
                 (
                     chat_id.clone(),
                     self.security_label_for_device(device_id, true),
                     self.presence_state_for_device(device_id),
+                    route_label,
                 )
             })
             .collect();
 
-        for (chat_id, security_label, presence_state) in updates {
+        for (chat_id, security_label, presence_state, route_label) in updates {
             if let Some(chat) = self.chats.iter_mut().find(|chat| chat.id == chat_id) {
-                chat.presence_label = presence_label(presence_state).to_string();
+                chat.presence_label = format!("{} · {}", presence_label(presence_state), route_label);
                 chat.presence_state = presence_state;
                 chat.security_label = security_label;
             }
@@ -1676,15 +2273,26 @@ impl ClientState {
 
     fn presence_state_for_device(&self, device_id: &str) -> PresenceStateView {
         let has_runtime = self.contact_runtimes.contains_key(device_id);
+        let relay_presence = self
+            .peer_presence
+            .get(device_id)
+            .copied()
+            .unwrap_or(PeerTransportPresence::OfflineButQueueable);
         let is_verified = self.contacts.iter().any(|member| {
             member
                 .devices()
                 .any(|device| device.device_id().as_str() == device_id && device.is_verified())
         });
-        match (has_runtime, is_verified) {
-            (true, true) => PresenceStateView::Online,
-            (true, false) => PresenceStateView::Reconnecting,
-            (false, _) => PresenceStateView::Offline,
+        match (has_runtime, relay_presence, is_verified) {
+            (true, _, true) => PresenceStateView::Online,
+            (true, _, false) => PresenceStateView::Reconnecting,
+            (false, PeerTransportPresence::LanOnline | PeerTransportPresence::RelayOnline, true) => {
+                PresenceStateView::Online
+            }
+            (false, PeerTransportPresence::LanOnline | PeerTransportPresence::RelayOnline, false) => {
+                PresenceStateView::Reconnecting
+            }
+            (false, PeerTransportPresence::OfflineButQueueable, _) => PresenceStateView::Offline,
         }
     }
 }
@@ -1862,6 +2470,17 @@ fn invite_preview_view(preview: &InvitePreview) -> InvitePreviewView {
     }
 }
 
+fn contact_invite_preview_view(preview: &ContactInvitePreview) -> ContactInvitePreviewView {
+    ContactInvitePreviewView {
+        member_id: preview.member_id.clone(),
+        device_id: preview.device_id.clone(),
+        display_name: preview.display_name.clone(),
+        server_addr: preview.server_addr.clone(),
+        server_name: preview.server_name.clone(),
+        expires_at_label: timestamp_label(preview.expires_at_unix_ms),
+    }
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -1877,6 +2496,50 @@ fn nibble_to_hex(value: u8) -> char {
         10..=15 => (b'a' + (value - 10)) as char,
         _ => '0',
     }
+}
+
+// ── Persistent-identity helpers ───────────────────────────────────────────────
+
+/// Load a 32-byte bootstrap storage key from `path`, or generate a fresh one
+/// and persist it so every subsequent launch uses the same key.
+fn load_or_create_storage_key(
+    path: &std::path::Path,
+    rng: &mut impl rand_core::RngCore,
+) -> Result<StorageKey, String> {
+    if path.exists() {
+        let raw = fs::read(path).map_err(|e| format!("read bootstrap.key: {e}"))?;
+        let arr: [u8; 32] = raw
+            .try_into()
+            .map_err(|_| "bootstrap.key has wrong length — delete it to regenerate".to_string())?;
+        Ok(StorageKey::from_bytes(arr))
+    } else {
+        let mut raw = [0u8; 32];
+        rng.fill_bytes(&mut raw);
+        fs::write(path, &raw).map_err(|e| format!("write bootstrap.key: {e}"))?;
+        Ok(StorageKey::from_bytes(raw))
+    }
+}
+
+/// Return a human-readable display name for this user.
+///
+/// Priority:
+///   1. `LOCALMESSENGER_DISPLAY_NAME` environment variable
+///   2. `USERNAME` (Windows) / `USER` (Unix)
+///   3. `LOGNAME` (POSIX fallback)
+///   4. `"User"` hard-coded fallback
+fn resolve_display_name() -> String {
+    std::env::var("LOCALMESSENGER_DISPLAY_NAME")
+        .or_else(|_| std::env::var("USERNAME"))
+        .or_else(|_| std::env::var("USER"))
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "User".to_string())
+}
+
+/// Return a short device-name suffix (OS hostname when available).
+fn system_device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "Desktop".to_string())
 }
 
 fn now_unix_ms() -> i64 {

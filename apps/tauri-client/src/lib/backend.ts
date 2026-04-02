@@ -135,6 +135,26 @@ export async function previewInviteLink(
   return invoke<ClientSnapshot>("preview_invite", { invite_link: inviteLink });
 }
 
+export async function createContactInviteLink(): Promise<string> {
+  if (!hasTauriRuntime()) {
+    return "localmessenger://contact?token=mock-contact";
+  }
+
+  return invoke<string>("create_contact_invite");
+}
+
+export async function previewContactInviteLink(
+  inviteLink: string,
+): Promise<ClientSnapshot> {
+  if (!hasTauriRuntime()) {
+    return mockBackend.previewInvite(inviteLink);
+  }
+
+  return invoke<ClientSnapshot>("preview_contact_invite", {
+    invite_link: inviteLink,
+  });
+}
+
 export async function acceptInviteLink(
   inviteLink: string,
 ): Promise<ClientSnapshot> {
@@ -143,6 +163,18 @@ export async function acceptInviteLink(
   }
 
   return invoke<ClientSnapshot>("accept_invite", { invite_link: inviteLink });
+}
+
+export async function acceptContactInviteLink(
+  inviteLink: string,
+): Promise<ClientSnapshot> {
+  if (!hasTauriRuntime()) {
+    return mockBackend.acceptInvite(inviteLink);
+  }
+
+  return invoke<ClientSnapshot>("accept_contact_invite", {
+    invite_link: inviteLink,
+  });
 }
 
 export async function checkForClientUpdates(): Promise<ClientSnapshot> {

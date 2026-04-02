@@ -1,10 +1,13 @@
 import { create } from "zustand";
 
 import {
+  acceptContactInviteLink,
   acceptInviteLink,
   checkForClientUpdates,
+  createContactInviteLink,
   forwardClientMessage,
   loadClientSnapshot,
+  previewContactInviteLink,
   previewInviteLink,
   refreshPeerDiscovery,
   sendClientMedia,
@@ -46,6 +49,9 @@ type ClientStore = {
   verifyDevice: (action: VerificationAction) => Promise<void>;
   previewInvite: (inviteLink: string) => Promise<void>;
   acceptInvite: (inviteLink: string) => Promise<void>;
+  createContactInvite: () => Promise<string>;
+  previewContactInvite: (inviteLink: string) => Promise<void>;
+  acceptContactInvite: (inviteLink: string) => Promise<void>;
   checkForUpdates: () => Promise<void>;
   startChatWithPeer: (deviceId: string) => Promise<void>;
   toggleTheme: () => void;
@@ -438,6 +444,66 @@ export const useClientStore = create<ClientStore>((set, get) => ({
         busy: false,
         error:
           error instanceof Error ? error.message : "Invite acceptance failed",
+      });
+    }
+  },
+  createContactInvite: async () => {
+    set({ busy: true, error: null });
+    try {
+      const inviteLink = await createContactInviteLink();
+      set({ busy: false });
+      return inviteLink;
+    } catch (error) {
+      set({
+        busy: false,
+        error: error instanceof Error ? error.message : "Contact invite creation failed",
+      });
+      throw error;
+    }
+  },
+  previewContactInvite: async (inviteLink) => {
+    set({ busy: true, error: null });
+    try {
+      const snapshot = await previewContactInviteLink(inviteLink);
+      const { nextChatId, nextVerificationDeviceId } = synchronizeSelection(
+        snapshot,
+        get().selectedChatId,
+        get().selectedVerificationDeviceId,
+      );
+
+      set({
+        snapshot,
+        selectedChatId: nextChatId,
+        selectedVerificationDeviceId: nextVerificationDeviceId,
+        busy: false,
+      });
+    } catch (error) {
+      set({
+        busy: false,
+        error: error instanceof Error ? error.message : "Contact invite preview failed",
+      });
+    }
+  },
+  acceptContactInvite: async (inviteLink) => {
+    set({ busy: true, error: null });
+    try {
+      const snapshot = await acceptContactInviteLink(inviteLink);
+      const { nextChatId, nextVerificationDeviceId } = synchronizeSelection(
+        snapshot,
+        get().selectedChatId,
+        get().selectedVerificationDeviceId,
+      );
+
+      set({
+        snapshot,
+        selectedChatId: nextChatId,
+        selectedVerificationDeviceId: nextVerificationDeviceId,
+        busy: false,
+      });
+    } catch (error) {
+      set({
+        busy: false,
+        error: error instanceof Error ? error.message : "Contact invite accept failed",
       });
     }
   },

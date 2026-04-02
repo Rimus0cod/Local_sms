@@ -35,9 +35,19 @@ export interface InvitePreviewView {
   maxUses: number;
 }
 
+export interface ContactInvitePreviewView {
+  memberId: string;
+  deviceId: string;
+  displayName: string;
+  serverAddr: string;
+  serverName: string;
+  expiresAtLabel: string;
+}
+
 export interface OnboardingView {
   statusLabel: string;
   invitePreview: InvitePreviewView | null;
+  contactInvitePreview: ContactInvitePreviewView | null;
 }
 
 export interface UpdaterView {

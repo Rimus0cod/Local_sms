@@ -11,6 +11,7 @@ bincode.workspace = true
 localmessenger_core = { path = "../core" }
 localmessenger_crypto = { path = "../crypto" }
 localmessenger_discovery = { path = "../discovery" }
+localmessenger_server_protocol = { path = "../server_protocol" }
 rand_core.workspace = true
 serde.workspace = true
 sha2.workspace = true

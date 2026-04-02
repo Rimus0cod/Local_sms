@@ -9,12 +9,14 @@ use sqlx::{Pool, Row, Sqlite};
 use crate::cipher::AtRestCipher;
 use crate::error::StorageError;
 use crate::models::{
-    StorageKey, StoredLocalDeviceSecrets, StoredMessage, StoredPendingOutbound, validate_identifier,
+    StorageKey, StoredLocalDeviceSecrets, StoredMessage, StoredPendingOutbound,
+    StoredRemotePeerOffer, validate_identifier,
 };
 
 const DEVICE_NAMESPACE: &str = "device";
 const LOCAL_SECRETS_NAMESPACE: &str = "local-device-secrets";
 const PEER_NAMESPACE: &str = "peer";
+const REMOTE_OFFER_NAMESPACE: &str = "remote-peer-offer";
 const MESSAGE_NAMESPACE: &str = "message";
 const CONVERSATION_NAMESPACE: &str = "conversation";
 const PENDING_NAMESPACE: &str = "pending-outbound";
@@ -175,6 +177,44 @@ impl SqliteStorage {
                 let encrypted_blob: Vec<u8> = row.try_get("encrypted_blob")?;
                 self.cipher
                     .decrypt(PEER_NAMESPACE, &lookup_key, &encrypted_blob)
+            })
+            .collect()
+    }
+
+    pub async fn upsert_remote_peer_offer(
+        &self,
+        offer: &StoredRemotePeerOffer,
+    ) -> Result<(), StorageError> {
+        let lookup_key = opaque_lookup_key(REMOTE_OFFER_NAMESPACE, &offer.invite.device_id);
+        let blob = self
+            .cipher
+            .encrypt(REMOTE_OFFER_NAMESPACE, &lookup_key, offer)?;
+        sqlx::query(
+            r#"
+            INSERT INTO remote_peer_offers (lookup_key, encrypted_blob)
+            VALUES (?, ?)
+            ON CONFLICT(lookup_key) DO UPDATE SET encrypted_blob = excluded.encrypted_blob
+            "#,
+        )
+        .bind(lookup_key.to_vec())
+        .bind(blob)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_remote_peer_offers(&self) -> Result<Vec<StoredRemotePeerOffer>, StorageError> {
+        let rows =
+            sqlx::query("SELECT lookup_key, encrypted_blob FROM remote_peer_offers ORDER BY rowid")
+                .fetch_all(&self.pool)
+                .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let lookup_key: Vec<u8> = row.try_get("lookup_key")?;
+                let encrypted_blob: Vec<u8> = row.try_get("encrypted_blob")?;
+                self.cipher
+                    .decrypt(REMOTE_OFFER_NAMESPACE, &lookup_key, &encrypted_blob)
             })
             .collect()
     }
@@ -347,6 +387,11 @@ impl SqliteStorage {
             );
 
             CREATE TABLE IF NOT EXISTS peer_snapshots (
+                lookup_key BLOB PRIMARY KEY,
+                encrypted_blob BLOB NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_peer_offers (
                 lookup_key BLOB PRIMARY KEY,
                 encrypted_blob BLOB NOT NULL
             );

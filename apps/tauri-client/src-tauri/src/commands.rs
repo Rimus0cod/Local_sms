@@ -7,7 +7,8 @@ use crate::tray::sync_tray;
 pub async fn load_client_snapshot(
     state: State<'_, SharedClientState>,
 ) -> Result<ClientSnapshot, String> {
-    let guard = state.lock().await;
+    let mut guard = state.lock().await;
+    guard.poll_background_state();
     Ok(guard.snapshot())
 }
 
@@ -149,6 +150,27 @@ pub async fn preview_invite(
 }
 
 #[tauri::command]
+pub async fn create_contact_invite(
+    state: State<'_, SharedClientState>,
+) -> Result<String, String> {
+    let guard = state.lock().await;
+    guard.create_contact_invite()
+}
+
+#[tauri::command]
+pub async fn preview_contact_invite(
+    app: AppHandle,
+    state: State<'_, SharedClientState>,
+    invite_link: String,
+) -> Result<ClientSnapshot, String> {
+    let mut guard = state.lock().await;
+    guard.preview_contact_invite(&invite_link)?;
+    let snapshot = guard.snapshot();
+    sync_tray(&app, &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
 pub async fn accept_invite(
     app: AppHandle,
     state: State<'_, SharedClientState>,
@@ -156,6 +178,19 @@ pub async fn accept_invite(
 ) -> Result<ClientSnapshot, String> {
     let mut guard = state.lock().await;
     guard.accept_invite(&invite_link).await?;
+    let snapshot = guard.snapshot();
+    sync_tray(&app, &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub async fn accept_contact_invite(
+    app: AppHandle,
+    state: State<'_, SharedClientState>,
+    invite_link: String,
+) -> Result<ClientSnapshot, String> {
+    let mut guard = state.lock().await;
+    guard.accept_contact_invite(&invite_link).await?;
     let snapshot = guard.snapshot();
     sync_tray(&app, &snapshot);
     Ok(snapshot)

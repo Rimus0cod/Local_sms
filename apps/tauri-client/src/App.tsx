@@ -31,6 +31,9 @@ export function App() {
   const verifyDevice = useClientStore((state) => state.verifyDevice);
   const previewInvite = useClientStore((state) => state.previewInvite);
   const acceptInvite = useClientStore((state) => state.acceptInvite);
+  const createContactInvite = useClientStore((state) => state.createContactInvite);
+  const previewContactInvite = useClientStore((state) => state.previewContactInvite);
+  const acceptContactInvite = useClientStore((state) => state.acceptContactInvite);
   const checkForUpdates = useClientStore((state) => state.checkForUpdates);
   const toggleTheme = useClientStore((state) => state.toggleTheme);
   const setLocale = useClientStore((state) => state.setLocale);
@@ -46,6 +49,8 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteDraft, setInviteDraft] = useState("");
+  const [contactInviteDraft, setContactInviteDraft] = useState("");
+  const [generatedContactInvite, setGeneratedContactInvite] = useState("");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceChunksRef = useRef<Blob[]>([]);
@@ -165,6 +170,8 @@ export function App() {
         copy={copy}
         busy={busy}
         inviteDraft={inviteDraft}
+        contactInviteDraft={contactInviteDraft}
+        generatedContactInvite={generatedContactInvite}
         selectedVerificationDeviceId={selectedVerificationDeviceId}
         onClose={() => setSettingsOpen(false)}
         onToggleTheme={toggleTheme}
@@ -176,6 +183,14 @@ export function App() {
         onInviteDraftChange={setInviteDraft}
         onPreviewInvite={() => void previewInvite(inviteDraft)}
         onAcceptInvite={() => void acceptInvite(inviteDraft)}
+        onContactInviteDraftChange={setContactInviteDraft}
+        onCreateContactInvite={() => {
+          void createContactInvite().then((invite) => {
+            setGeneratedContactInvite(invite);
+          });
+        }}
+        onPreviewContactInvite={() => void previewContactInvite(contactInviteDraft)}
+        onAcceptContactInvite={() => void acceptContactInvite(contactInviteDraft)}
         onCheckForUpdates={() => void checkForUpdates()}
       />
 

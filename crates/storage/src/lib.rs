@@ -8,6 +8,7 @@ mod store;
 pub use error::StorageError;
 pub use models::{
     StorageKey, StoredLocalDeviceSecrets, StoredMessage, StoredMessageKind, StoredPendingOutbound,
+    StoredRemotePeerOffer, StoredTransportIdentity,
 };
 pub use store::SqliteStorage;
 
@@ -64,8 +65,9 @@ mod tests {
         let identity = IdentityKeyPair::generate(&mut rng);
         let device = make_device("alice", "alice-phone", "Alice Phone", &identity);
         let prekeys = LocalPrekeyStore::generate(&mut rng, &identity, 101, 3, 5000);
-        let secrets = StoredLocalDeviceSecrets::from_runtime(device.clone(), &identity, &prekeys)
-            .expect("runtime secrets should validate");
+        let secrets =
+            StoredLocalDeviceSecrets::from_runtime(device.clone(), &identity, &prekeys, None)
+                .expect("runtime secrets should validate");
 
         storage
             .store_local_device_secrets(&secrets)

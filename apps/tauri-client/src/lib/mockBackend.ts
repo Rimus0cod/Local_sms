@@ -266,6 +266,7 @@ function createInitialSnapshot(): ClientSnapshot {
     onboarding: {
       statusLabel: "Paste an invite link to join a relay.",
       invitePreview: null,
+      contactInvitePreview: null,
     },
     updater: {
       currentVersion: "0.1.0",
@@ -498,6 +499,7 @@ export async function previewInvite(
       expiresAtLabel: "Tomorrow",
       maxUses: 4,
     },
+    contactInvitePreview: null,
   };
   if (inviteLink.trim().length === 0) {
     snapshot.onboarding.statusLabel = "Invite link is empty.";

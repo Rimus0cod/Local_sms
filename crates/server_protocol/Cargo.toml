@@ -9,9 +9,13 @@ authors.workspace = true
 base64.workspace = true
 hmac.workspace = true
 localmessenger_core = { path = "../core" }
+localmessenger_crypto = { path = "../crypto" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+
+[dev-dependencies]
+rand_core.workspace = true
 
 [lints]
 workspace = true

@@ -2,6 +2,7 @@ use localmessenger_core::{Device, DeviceId, MemberId};
 use localmessenger_crypto::{
     IdentityKeyMaterial, IdentityKeyPair, LocalPrekeyStore, PrekeyStoreMaterial,
 };
+use localmessenger_server_protocol::DeviceContactInvite;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -42,6 +43,15 @@ pub struct StoredLocalDeviceSecrets {
     pub device: Device,
     pub identity_key_material: IdentityKeyMaterial,
     pub prekey_store_material: PrekeyStoreMaterial,
+    #[serde(default)]
+    pub transport_identity: Option<StoredTransportIdentity>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredTransportIdentity {
+    pub server_name: String,
+    pub certificate_der: Vec<u8>,
+    pub private_key_der: Vec<u8>,
 }
 
 impl StoredLocalDeviceSecrets {
@@ -49,6 +59,7 @@ impl StoredLocalDeviceSecrets {
         device: Device,
         identity_keypair: &IdentityKeyPair,
         prekey_store: &LocalPrekeyStore,
+        transport_identity: Option<StoredTransportIdentity>,
     ) -> Result<Self, StorageError> {
         if device.identity_keys() != &identity_keypair.public_keys() {
             return Err(StorageError::LocalDeviceIdentityMismatch);
@@ -61,6 +72,7 @@ impl StoredLocalDeviceSecrets {
             device,
             identity_key_material: identity_keypair.to_material(),
             prekey_store_material: prekey_store.to_material(),
+            transport_identity,
         })
     }
 
@@ -73,6 +85,11 @@ impl StoredLocalDeviceSecrets {
             self.prekey_store_material.clone(),
         )?)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredRemotePeerOffer {
+    pub invite: DeviceContactInvite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
